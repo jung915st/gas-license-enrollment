@@ -36,8 +36,11 @@ function runEnrollmentTests() {
   const statuses = function (rows) { return rows.map(function (row) { return row.status + row.rank; }); };
 
   // --- 軟體清單 ---
-  check('預設軟體清單共 6 套', softwareList.length, 6);
-  check('預設可用授權數', softwareList.map(function (sw) { return sw.quota; }), [5, 5, 10, 10, 15, 7]);
+  check('預設軟體清單共 7 套，TeacherSay 在第一列', [softwareList.length, softwareList[0].name], [7, 'TeacherSay 專業版']);
+  check('預設可用授權數 (TeacherSay 不限)', softwareList.map(function (sw) { return quotaText_(sw.quota); }),
+    ['不限', 5, 5, 10, 10, 15, 7]);
+  check('可用授權數「不限」的寫法', parseSoftwareRows_([['A', '不限', '', ''], ['B', ' 無限 ', '', ''], ['C', 'Unlimited', '', ''], ['D', '', '', '']])
+    .map(function (sw) { return isFinite(sw.quota) ? sw.quota : 'inf'; }), ['inf', 'inf', 'inf', 0]);
   check('只有 Google AI Pro 有每組限一位', softwareList.filter(function (sw) { return sw.limited; })
     .map(function (sw) { return sw.name; }), ['Google AI Pro 教育版']);
   check('預設分配方式：只有 HiTeach 取序號', softwareList.filter(function (sw) { return sw.mode === MODE.SERIAL; })
@@ -88,6 +91,34 @@ function runEnrollmentTests() {
   const officeSub = answers('行政', officeExtra);
   check('行政：職務與組別', [officeSub.identity, officeSub.group], ['行政／教務處', '行政']);
   check('行政不在可申請組別內', LIMITED_GROUPS.indexOf(officeSub.group), -1);
+  const kgExtra = {}; kgExtra[Q_OFFICE] = '幼兒園';
+  const kgSub = answers('行政', kgExtra);
+  check('行政／幼兒園：職務與組別', [kgSub.identity, kgSub.group], ['行政／幼兒園', '行政']);
+  check('行政處室選項含幼兒園', OFFICE_CHOICES.indexOf('幼兒園') >= 0, true);
+
+  // --- 三題軟體合併 ---
+  const pick = function (software, teacherSay, aiPro) { return collectSelections_(software, teacherSay, aiPro, softwareList); };
+  check('TeacherSay＋其他軟體＋Google AI Pro「是」，依清單順序',
+    pick('HiTeach 專業版, Kahoot 教師版', 'TeacherSay 專業版', '是'),
+    ['TeacherSay 專業版', 'Kahoot 教師版', 'HiTeach 專業版', 'Google AI Pro 教育版']);
+  check('Google AI Pro「否」不加入', pick('Padlet 學校版', 'TeacherSay 專業版', '否'), ['TeacherSay 專業版', 'Padlet 學校版']);
+  check('只勾 TeacherSay', pick('', 'TeacherSay 專業版', '否'), ['TeacherSay 專業版']);
+  check('v3.1 舊回應：Google AI Pro 在核取方塊內、沒有新題目', pick('Google AI Pro 教育版, Wordwall 專業版', null, null),
+    ['Wordwall 專業版', 'Google AI Pro 教育版']);
+  check('軟體清單沒有 Google AI Pro 時「是」不加入',
+    collectSelections_('', 'TeacherSay 專業版', '是', parseSoftwareRows_([['TeacherSay 專業版', '不限', '帳號', '']])), ['TeacherSay 專業版']);
+  const fullNv = {};
+  fullNv[Q_NAME] = ['王']; fullNv[Q_EMAIL] = ['w@gmail.com']; fullNv[Q_ROLE] = ['學年']; fullNv[Q_GRADE] = ['二年級'];
+  fullNv[Q_TEACHERSAY] = ['TeacherSay 專業版']; fullNv[Q_SOFTWARE] = ['']; fullNv[Q_AI_PRO] = ['是'];
+  fullNv[Q_WORKSPACE] = ['w@mail.lres.tc.edu.tw'];
+  check('parseSubmission_ 讀取三題', parseSubmission_(fullNv, softwareList, at(0)).selections,
+    ['TeacherSay 專業版', 'Google AI Pro 教育版']);
+
+  // --- 學校帳號規則 (表單驗證用) ---
+  const schoolRe = new RegExp(schoolAccountPattern_());
+  check('學校帳號規則', ['a@mail.lres.tc.edu.tw', 'A@MAIL.LRES.TC.EDU.TW', 'a@gmail.com', 'a@mailxlres.tc.edu.tw', 'a@mail.lres.tc.edu.tw.x.com']
+    .map(function (x) { return schoolRe.test(x); }), [true, true, false, false, false]);
+
   check('groupOf_：從登記表的職務欄還原組別',
     [groupOf_('學年／六年級'), groupOf_('科任／社會'), groupOf_('科任'), groupOf_('行政／輔導室'), groupOf_('')],
     ['六年級', '科任', '科任', '行政', '']);
@@ -139,6 +170,12 @@ function runEnrollmentTests() {
   const text = buildRemainingText_(computeStats_(kahoot.concat(ai), softwareList), '');
   check('剩餘文字：額滿', text.indexOf('・Kahoot 教師版：已額滿（備取 1 人）') >= 0, true);
   check('剩餘文字：未額滿', text.indexOf('・HiTeach 專業版：剩餘 15／15') >= 0, true);
+  check('剩餘文字：TeacherSay 不限名額', text.indexOf('・TeacherSay 專業版：不限名額（每位申請者必選）') >= 0, true);
+  const unlimited = [];
+  for (let i = 0; i < 30; i++) unlimited.push(reg(i, 'u' + i + '@x.tw', '科任', 'TeacherSay 專業版'));
+  check('不限名額：30 人全部正取', applyRank(unlimited).every(function (row) { return row.status === STATUS.OK; }), true);
+  check('不限名額：統計顯示「不限」',
+    quotaText_(computeStats_(unlimited, softwareList).filter(function (st) { return st.name === 'TeacherSay 專業版'; })[0].remaining), '不限');
   check('剩餘文字：限制型', text.indexOf('・Google AI Pro 教育版：剩餘 5／7｜限各學年、科任各一位，尚可申請：二年級') >= 0, true);
 
   // --- 重複登記 ---

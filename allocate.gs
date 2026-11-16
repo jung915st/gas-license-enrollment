@@ -14,6 +14,7 @@ const ACCOUNT_SYNC_SHEETS = { 'Wordwall 專業版': 'wordwall授權確認' };
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('授權管理')
+    .addItem('顯示申請表單網址', 'menuShowFormUrls')
     .addItem('重新統計並更新表單剩餘名額', 'menuRefreshAll')
     .addItem('重新排序正取／備取', 'menuRerank')
     .addSeparator()
@@ -25,7 +26,7 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(SpreadsheetApp.getUi().createMenu('初次設定')
       .addItem('1. 初始化分頁', 'setupSheets')
-      .addItem('2. 建立新申請表單（已建立則更新選項）', 'setupForm')
+      .addItem('2. 建立新申請表單（已建立則更新）', 'setupForm')
       .addItem('3. 建立表單提交觸發', 'createFormSubmitTrigger'))
     .addToUi();
 }
@@ -33,6 +34,18 @@ function onOpen() {
 // =====================================================================
 // 選單動作
 // =====================================================================
+
+function menuShowFormUrls() {
+  const form = getEnrollmentForm_();
+  if (!form) {
+    notify_('尚未建立申請表單，請先執行「初次設定 → 2. 建立新申請表單」。');
+    return;
+  }
+  const prefill = PropertiesService.getScriptProperties().getProperty(PROP.PREFILL_URL);
+  notify_('請發給老師這個網址（' + REQUIRED_SOFTWARE + ' 已預先勾選）：\n' + (prefill || '(尚未產生，請再執行一次「2. 建立新申請表單」)') +
+    '\n\n一般填寫網址：' + form.getPublishedUrl() +
+    '\n編輯網址：' + form.getEditUrl());
+}
 
 function menuRefreshAll() {
   const state = recalcAll_(SpreadsheetApp.getActiveSpreadsheet());
@@ -389,7 +402,7 @@ function syncAccountSheet_(ss, row) {
 function backfillFromResponses_(ss) {
   const responseSheet = getResponseSheet_(ss);
   if (!responseSheet) {
-    throw new Error('找不到授權申請表單的回應分頁，請先執行選單「初次設定 → 2. 建立新申請表單」。');
+    throw new Error('找不到授權申請表單的回應分頁，請先執行選單「初次設定 → 2. 建立新申請表單（已建立則更新）」。');
   }
   if (responseSheet.getLastRow() < 2) return 0;
 

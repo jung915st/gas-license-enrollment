@@ -1,10 +1,12 @@
 // 教學軟體授權登記與分配系統
-// 版本 v3.1
+// 版本 v3.2
 // 更新：表單送出改為「登記」，依登記先後排定正取／備取，不再自動發放序號。
 //       管理者在「申請登記」分頁勾選核准後，再由 allocate.gs 從「序號列表」發放並寄信通知。
 // v3.1：改用 setupForm() 建立的新表單 (舊表單的回應一律忽略，避免重複紀錄)；
 //       職務題依 學年／科任／行政 分支；通知信寄到開通授權的 Google 帳號，
 //       並副本給 Google AI Pro 的學校帳號。
+// v3.2：TeacherSay 專業版為必選 (未勾選無法送出)；Google AI Pro 改為「是／否」題，
+//       選「是」才進入學校帳號頁且必填；行政處室加「幼兒園」；可用授權數可填「不限」。
 //
 // 檔案分工：
 //   code.gs             設定、表單送出登記、正取／備取排序、統計
@@ -28,21 +30,31 @@ const Q_ROLE = '您的職務（學年／科任／行政）';       // 依選項�
 const Q_GRADE = '任教學年';
 const Q_SUBJECT = '任教科目';
 const Q_OFFICE = '所屬處室';
-const Q_SOFTWARE = '您要申請的軟體授權';
-const Q_WORKSPACE = '申請 Google AI Pro 教育版的學校帳號'; // 選填；授權通知信的副本收件信箱
+const Q_TEACHERSAY = 'TeacherSay 專業版（必選）';          // 必填核取方塊，只有一個選項
+const Q_SOFTWARE = '您要申請的軟體授權';                    // 其他軟體 (不含 TeacherSay、Google AI Pro)
+const Q_AI_PRO = '是否申請 Google AI Pro 教育版？';          // 是 → 學校帳號頁；否 → 送出
+const Q_WORKSPACE = '申請 Google AI Pro 教育版的學校帳號';   // 選「是」才出現且必填；授權通知信的副本收件信箱
+const AI_YES = '是';
+const AI_NO = '否';
 
 const ROLE = { GRADE: '學年', SUBJECT: '科任', OFFICE: '行政' };
 const GRADE_CHOICES = ['一年級', '二年級', '三年級', '四年級', '五年級', '六年級'];
-const OFFICE_CHOICES = ['教務處', '學務處', '總務處', '輔導室'];
+const OFFICE_CHOICES = ['教務處', '學務處', '總務處', '輔導室', '幼兒園'];
 
 // 「每組限一位」軟體可申請的組別：各學年＋科任 (行政不可申請)
 const LIMITED_GROUPS = GRADE_CHOICES.concat([ROLE.SUBJECT]);
 
-// 以學校帳號開通的軟體：通知信會寫明開通在學校帳號
+// 以學校帳號開通的軟體：表單上獨立成「是／否」題，通知信會寫明開通在學校帳號
 const WORKSPACE_ACCOUNT_SOFTWARE = 'Google AI Pro 教育版';
 
+// 每位申請者必選的軟體：表單上是獨立的必填核取方塊，預填連結會預先勾選
+const REQUIRED_SOFTWARE = 'TeacherSay 專業版';
+
+// 「軟體清單」可用授權數填這個字 = 不限名額
+const UNLIMITED_TEXT = '不限';
+
 // 指令碼屬性：setupForm() 建立新表單時寫入，用來辨識哪一個回應分頁屬於這份表單
-const PROP = { FORM_ID: 'ENROLL_FORM_ID', RESPONSE_SHEET_ID: 'ENROLL_RESPONSE_SHEET_ID' };
+const PROP = { FORM_ID: 'ENROLL_FORM_ID', RESPONSE_SHEET_ID: 'ENROLL_RESPONSE_SHEET_ID', PREFILL_URL: 'ENROLL_PREFILL_URL' };
 
 const MODE = { SERIAL: '序號', ACCOUNT: '帳號' };
 const LIMIT_PER_GROUP_TEXT = '各學年、科任各一位';
@@ -50,6 +62,7 @@ const LIMIT_PER_GROUP_TEXT = '各學年、科任各一位';
 // 「軟體清單」分頁的預設內容 (分頁不存在時也以此為準)
 // 欄位：軟體名稱、可用授權數、分配方式 (序號 = 從序號列表取號；帳號 = 直接開通在登記的帳號)、申請限制 (有填 = 每組限一位)
 const DEFAULT_SOFTWARE = [
+  ['TeacherSay 專業版', UNLIMITED_TEXT, MODE.ACCOUNT, ''],
   ['Wayground (Quizizz)', 5, MODE.ACCOUNT, ''],
   ['Kahoot 教師版', 5, MODE.ACCOUNT, ''],
   ['Padlet 學校版', 10, MODE.ACCOUNT, ''],
@@ -204,6 +217,15 @@ function escapeHtml_(text) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function isUnlimitedText_(value) {
+  return /^(不限|無限|unlimited)$/i.test(String(value == null ? '' : value).trim());
+}
+
+/** 數量顯示用：不限名額顯示為「不限」。 */
+function quotaText_(value) {
+  return isFinite(value) ? value : UNLIMITED_TEXT;
+}
+
 /** 將「軟體清單」的列轉成設定物件。 */
 function parseSoftwareRows_(values) {
   const list = [];
@@ -212,7 +234,7 @@ function parseSoftwareRows_(values) {
     if (!name) return;
     list.push({
       name: name,
-      quota: Math.max(0, Math.floor(Number(row[1]) || 0)),
+      quota: isUnlimitedText_(row[1]) ? Infinity : Math.max(0, Math.floor(Number(row[1]) || 0)),
       mode: String(row[2] || '').indexOf(MODE.ACCOUNT) >= 0 ? MODE.ACCOUNT : MODE.SERIAL,
       limited: String(row[3] == null ? '' : row[3]).trim() !== ''
     });
@@ -268,8 +290,22 @@ function parseSubmission_(namedValues, softwareList, time) {
     identity: identity,
     group: groupOf_(identity),
     workspace: answerOf_(namedValues, Q_WORKSPACE) || '',
-    selections: parseSoftwareSelection_(software, softwareList)
+    selections: collectSelections_(software, answerOf_(namedValues, Q_TEACHERSAY),
+      answerOf_(namedValues, Q_AI_PRO), softwareList)
   };
+}
+
+/**
+ * 合併三題的勾選結果，依「軟體清單」的順序排列。
+ * TeacherSay 題與其他軟體題用名稱比對；Google AI Pro 題回答「是」時加入 Google AI Pro。
+ * (v3.1 表單把 Google AI Pro 放在軟體核取方塊內，名稱比對仍可辨識，補登舊回應不受影響。)
+ */
+function collectSelections_(software, teacherSay, aiPro, softwareList) {
+  const wanted = parseSoftwareSelection_([software, teacherSay].filter(function (text) { return text; }).join(', '), softwareList);
+  if (String(aiPro == null ? '' : aiPro).trim().indexOf(AI_YES) === 0) wanted.push(WORKSPACE_ACCOUNT_SOFTWARE);
+  return softwareList
+    .map(function (sw) { return sw.name; })
+    .filter(function (name) { return wanted.indexOf(name) >= 0; });
 }
 
 /**
@@ -446,6 +482,11 @@ function buildRemainingText_(stats, updatedAt) {
   ];
   stats.forEach(function (stat) {
     let line = '・' + stat.name + '：';
+    if (!isFinite(stat.quota)) {
+      line += '不限名額' + (stat.name === REQUIRED_SOFTWARE ? '（每位申請者必選）' : '');
+      lines.push(line);
+      return;
+    }
     line += stat.remaining > 0
       ? '剩餘 ' + stat.remaining + '／' + stat.quota
       : '已額滿（備取 ' + stat.wait + ' 人）';
@@ -577,7 +618,8 @@ function refreshStats_(ss, softwareList, rows) {
       note = '限' + LIMIT_PER_GROUP_TEXT + '；尚可申請：' + (stat.openGroups.length ? stat.openGroups.join('、') : '無');
       if (stat.ineligible > 0) note += '；不符資格 ' + stat.ineligible + ' 人';
     }
-    return [stat.name, stat.quota, stat.registered, stat.ok, stat.wait, stat.approved, stat.issued, stat.remaining, stat.mode, note];
+    return [stat.name, quotaText_(stat.quota), stat.registered, stat.ok, stat.wait, stat.approved, stat.issued,
+      quotaText_(stat.remaining), stat.mode, note];
   }));
   sheet.clearContents();
   sheet.getRange(1, 1, values.length, headers.length).setValues(values);
