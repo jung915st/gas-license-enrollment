@@ -21,7 +21,7 @@ function runEnrollmentTests() {
     rowIndex++;
     const row = {
       rowIndex: rowIndex, time: at(minute), name: email.split('@')[0], email: email, group: group,
-      software: software, status: '', rank: '', approved: false, serial: '', issuedAt: '', note: ''
+      software: software, status: '', rank: '', approved: false, serial: '', issuedAt: '', note: '', workspace: ''
     };
     Object.keys(extra || {}).forEach(function (key) { row[key] = extra[key]; });
     return row;
@@ -40,6 +40,8 @@ function runEnrollmentTests() {
   check('預設可用授權數', softwareList.map(function (sw) { return sw.quota; }), [5, 5, 10, 10, 15, 7]);
   check('只有 Google AI Pro 有每組限一位', softwareList.filter(function (sw) { return sw.limited; })
     .map(function (sw) { return sw.name; }), ['Google AI Pro 教育版']);
+  check('預設分配方式：只有 HiTeach 取序號', softwareList.filter(function (sw) { return sw.mode === MODE.SERIAL; })
+    .map(function (sw) { return sw.name; }), ['HiTeach 專業版']);
   check('空白列與非數字數量', parseSoftwareRows_([['', 3, '', ''], ['X', 'abc', '帳號開通', '']]),
     [{ name: 'X', quota: 0, mode: '帳號', limited: false }]);
 
@@ -61,6 +63,47 @@ function runEnrollmentTests() {
   }
   check('缺少題目時丟出錯誤並指出題目', thrown, 'missing-email');
 
+  // --- 職務分支 ---
+  const answers = function (role, extra) {
+    const nv = {};
+    nv[Q_NAME] = ['王小明'];
+    nv[Q_EMAIL] = ['wang@gmail.com'];
+    nv[Q_ROLE] = [role];
+    nv[Q_GRADE] = [''];
+    nv[Q_SUBJECT] = [''];
+    nv[Q_OFFICE] = [''];
+    nv[Q_SOFTWARE] = ['Google AI Pro 教育版'];
+    nv[Q_WORKSPACE] = [''];
+    Object.keys(extra || {}).forEach(function (key) { nv[key] = [extra[key]]; });
+    return parseSubmission_(nv, softwareList, at(0));
+  };
+  const gradeExtra = {}; gradeExtra[Q_GRADE] = '三年級'; gradeExtra[Q_SUBJECT] = '自然';
+  const gradeSub = answers('學年', gradeExtra);
+  check('學年：職務與組別 (忽略其他分支的舊答案)', [gradeSub.identity, gradeSub.group], ['學年／三年級', '三年級']);
+  const subjectExtra = {}; subjectExtra[Q_SUBJECT] = ' 自然 '; subjectExtra[Q_WORKSPACE] = 'wang@mail.lres.tc.edu.tw';
+  const subjectSub = answers('科任', subjectExtra);
+  check('科任：職務、組別、學校帳號', [subjectSub.identity, subjectSub.group, subjectSub.workspace],
+    ['科任／自然', '科任', 'wang@mail.lres.tc.edu.tw']);
+  const officeExtra = {}; officeExtra[Q_OFFICE] = '教務處';
+  const officeSub = answers('行政', officeExtra);
+  check('行政：職務與組別', [officeSub.identity, officeSub.group], ['行政／教務處', '行政']);
+  check('行政不在可申請組別內', LIMITED_GROUPS.indexOf(officeSub.group), -1);
+  check('groupOf_：從登記表的職務欄還原組別',
+    [groupOf_('學年／六年級'), groupOf_('科任／社會'), groupOf_('科任'), groupOf_('行政／輔導室'), groupOf_('')],
+    ['六年級', '科任', '科任', '行政', '']);
+
+  // --- 通知信副本與備註 ---
+  check('副本：學校帳號與主要帳號不同才加',
+    [ccFor_('a@gmail.com', 'a@mail.lres.tc.edu.tw'), ccFor_('A@x.tw', 'a@x.tw'), ccFor_('a@x.tw', ''), ccFor_('a@x.tw', 'oops')],
+    ['a@mail.lres.tc.edu.tw', '', '', '']);
+  check('withCc_ 沒有副本時不加 cc 欄位', Object.keys(withCc_({ to: 'a@x.tw' }, 'a@x.tw', '')), ['to']);
+  check('withCc_ 有學校帳號時加上 cc', withCc_({ to: 'a@gmail.com' }, 'a@gmail.com', 'a@mail.lres.tc.edu.tw').cc, 'a@mail.lres.tc.edu.tw');
+  check('備註：Google AI Pro 未填學校帳號', registrationNote_(gradeSub, 'Google AI Pro 教育版'), '未填學校帳號');
+  check('備註：其他軟體不需要學校帳號', registrationNote_(gradeSub, 'Kahoot 教師版'), '');
+  check('備註：學校帳號非校內網域',
+    registrationNote_({ email: 'a@gmail.com', workspace: 'a@gmail.com' }, 'Google AI Pro 教育版'), '學校帳號非 @mail.lres.tc.edu.tw');
+  check('備註：校內帳號正常', registrationNote_(subjectSub, 'Google AI Pro 教育版'), '');
+
   // --- 正取／備取 ---
   const kahoot = [];
   for (let i = 0; i < 7; i++) kahoot.push(reg(i, 't' + i + '@x.tw', '一年級', 'Kahoot 教師版'));
@@ -80,7 +123,7 @@ function runEnrollmentTests() {
     reg(1, 'a@x.tw', '一年級', 'Google AI Pro 教育版'),
     reg(2, 'b@x.tw', '一年級', 'Google AI Pro 教育版'),
     reg(3, 'c@x.tw', '科任', 'Google AI Pro 教育版'),
-    reg(4, 'd@x.tw', '行政／其他', 'Google AI Pro 教育版'),
+    reg(4, 'd@x.tw', '行政', 'Google AI Pro 教育版'),
     reg(5, 'e@x.tw', '', 'Google AI Pro 教育版')
   ]);
   check('同組第二位備取、行政與未填不符資格', statuses(ai), ['正取1', '備取1', '正取2', '不符資格', '不符資格']);
@@ -125,10 +168,15 @@ function runEnrollmentTests() {
     reg(6, 'p1@x.tw', '一年級', 'Wordwall 專業版', { approved: true }),
     reg(7, 'p1@x.tw', '一年級', 'Google AI Pro 教育版', { approved: true }),
     reg(8, 'p2@x.tw', '一年級', 'Google AI Pro 教育版', { approved: true }),
-    reg(9, 'p5@x.tw', '行政／其他', 'Google AI Pro 教育版', { approved: true }),
+    reg(9, 'p5@x.tw', '行政', 'Google AI Pro 教育版', { approved: true }),
     reg(10, 'p6@x.tw', '科任', 'Padlet 學校版', { approved: true })
   ]);
-  const plan = planIssue_(pool, softwareList, serials);
+  // 發放計畫用獨立的清單：Kahoot、Padlet、HiTeach 取序號，Wordwall、Google AI Pro 開通帳號
+  const issueList = parseSoftwareRows_([
+    ['Kahoot 教師版', 5, MODE.SERIAL, ''], ['Padlet 學校版', 10, MODE.SERIAL, ''], ['HiTeach 專業版', 15, MODE.SERIAL, ''],
+    ['Wordwall 專業版', 10, MODE.ACCOUNT, ''], ['Google AI Pro 教育版', 7, MODE.ACCOUNT, LIMIT_PER_GROUP_TEXT]
+  ]);
+  const plan = planIssue_(pool, issueList, serials);
   check('發放：序號依軟體配對，舊序號不重發',
     plan.issue.map(function (item) { return item.row.email + '|' + item.row.software + '|' + item.serial; }),
     ['p1@x.tw|HiTeach 專業版|HT-1', 'p2@x.tw|HiTeach 專業版|HT-2', 'p1@x.tw|Kahoot 教師版|KH-1',
@@ -152,6 +200,17 @@ function runEnrollmentTests() {
   check('回條：正取', describeOutcome_({ status: STATUS.OK, rank: 3, isNew: true }), '正取（第 3 位）');
   check('回條：重複登記', describeOutcome_({ status: STATUS.WAIT, rank: 2, isNew: false }).indexOf('您先前已登記過') === 0, true);
   check('HTML 跳脫', escapeHtml_('<b>"A&B"</b>'), '&lt;b&gt;&quot;A&amp;B&quot;&lt;/b&gt;');
+  const p1 = { row: reg(1, 'p1@gmail.com', '一年級', 'HiTeach 專業版', { workspace: 'p1@mail.lres.tc.edu.tw' }) };
+  const p1b = { row: reg(2, 'P1@gmail.com', '一年級', 'Kahoot 教師版') };
+  const p2 = { row: reg(3, 'p2@gmail.com', '科任', 'Kahoot 教師版') };
+  check('寄信額度：副本也算收件人', recipientCount_([p1, p1b, p2]), { people: 2, addresses: 3 });
+  check('學校帳號取同一人任一筆登記', workspaceOf_([p1b, p1]), 'p1@mail.lres.tc.edu.tw');
+  const aiHtml = buildIssueHtml_('王', 'p1@gmail.com', 'p1@mail.lres.tc.edu.tw', [
+    { row: reg(4, 'p1@gmail.com', '一年級', 'Google AI Pro 教育版'), serial: '', mode: MODE.ACCOUNT },
+    { row: reg(5, 'p1@gmail.com', '一年級', 'Kahoot 教師版'), serial: '', mode: MODE.ACCOUNT }
+  ]);
+  check('發放信：Google AI Pro 寫學校帳號，其餘寫 Google 帳號',
+    [aiHtml.indexOf('學校帳號（p1@mail.lres.tc.edu.tw）') >= 0, aiHtml.indexOf('Google 帳號（p1@gmail.com）') >= 0], [true, true]);
   check('Email 格式檢查', [isEmail_('a@b.tw'), isEmail_('a@b'), isEmail_('a b@c.tw')], [true, false, false]);
 
   const failed = results.filter(function (r) { return !r.ok; });

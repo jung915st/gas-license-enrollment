@@ -1,7 +1,10 @@
 // 教學軟體授權登記與分配系統
-// 版本 v3.0
+// 版本 v3.1
 // 更新：表單送出改為「登記」，依登記先後排定正取／備取，不再自動發放序號。
 //       管理者在「申請登記」分頁勾選核准後，再由 allocate.gs 從「序號列表」發放並寄信通知。
+// v3.1：改用 setupForm() 建立的新表單 (舊表單的回應一律忽略，避免重複紀錄)；
+//       職務題依 學年／科任／行政 分支；通知信寄到開通授權的 Google 帳號，
+//       並副本給 Google AI Pro 的學校帳號。
 //
 // 檔案分工：
 //   code.gs             設定、表單送出登記、正取／備取排序、統計
@@ -10,26 +13,36 @@
 //   tests_enrollment.gs 離線單元測試 (runEnrollmentTests)
 
 // === 全域設定 ===
-const RESPONSE_SHEET_NAME = "表單回應 1"; // 接收表單回應的分頁名稱 (找不到時自動改用其他表單連結分頁)
 const LICENSE_SHEET_NAME = "序號列表";   // A 序號、B 使用者Email、C 分配時間、D 軟體 (留空視為 HiTeach 專業版)
 const ADMIN_EMAIL = "lres712@mail.lres.tc.edu.tw"; // 管理者通知信箱
+const SCHOOL_DOMAIN = "mail.lres.tc.edu.tw";       // 學校 Google Workspace 網域 (Google AI Pro 以此帳號開通)
 
 const SOFTWARE_SHEET_NAME = "軟體清單"; // A 軟體名稱、B 可用授權數、C 分配方式、D 申請限制
 const REG_SHEET_NAME = "申請登記";      // 一列 = 一位申請人的一套軟體
 const STATS_SHEET_NAME = "申請統計";    // 各軟體登記人數與剩餘名額 (自動產生，請勿手動編輯)
 
-// 表單連結網址；留空則自動使用連結到本試算表的表單
-const FORM_URL = '';
-
-// 表單題目名稱：必須與 Google 表單上的題目「完全一致」(空白差異會自動忽略)
+// 表單題目名稱：由 setupForm() 建立。若在表單上改了題目名稱，這裡要同步修改 (空白與大小寫差異會自動忽略)
 const Q_NAME = '您的大名';
-const Q_EMAIL = '您的常用email信箱';
-const Q_GROUP = '您的身分（學年／科任）';
+const Q_EMAIL = '您要用來開通授權的 Google 帳號';   // 授權通知信的收件信箱
+const Q_ROLE = '您的職務（學年／科任／行政）';       // 依選項分支到下面三題之一
+const Q_GRADE = '任教學年';
+const Q_SUBJECT = '任教科目';
+const Q_OFFICE = '所屬處室';
 const Q_SOFTWARE = '您要申請的軟體授權';
+const Q_WORKSPACE = '申請 Google AI Pro 教育版的學校帳號'; // 選填；授權通知信的副本收件信箱
 
-// 身分選項；LIMITED_GROUPS 為「每組限一位」軟體可申請的組別
-const GROUP_CHOICES = ['一年級', '二年級', '三年級', '四年級', '五年級', '六年級', '科任', '行政／其他'];
-const LIMITED_GROUPS = ['一年級', '二年級', '三年級', '四年級', '五年級', '六年級', '科任'];
+const ROLE = { GRADE: '學年', SUBJECT: '科任', OFFICE: '行政' };
+const GRADE_CHOICES = ['一年級', '二年級', '三年級', '四年級', '五年級', '六年級'];
+const OFFICE_CHOICES = ['教務處', '學務處', '總務處', '輔導室'];
+
+// 「每組限一位」軟體可申請的組別：各學年＋科任 (行政不可申請)
+const LIMITED_GROUPS = GRADE_CHOICES.concat([ROLE.SUBJECT]);
+
+// 以學校帳號開通的軟體：通知信會寫明開通在學校帳號
+const WORKSPACE_ACCOUNT_SOFTWARE = 'Google AI Pro 教育版';
+
+// 指令碼屬性：setupForm() 建立新表單時寫入，用來辨識哪一個回應分頁屬於這份表單
+const PROP = { FORM_ID: 'ENROLL_FORM_ID', RESPONSE_SHEET_ID: 'ENROLL_RESPONSE_SHEET_ID' };
 
 const MODE = { SERIAL: '序號', ACCOUNT: '帳號' };
 const LIMIT_PER_GROUP_TEXT = '各學年、科任各一位';
@@ -37,9 +50,9 @@ const LIMIT_PER_GROUP_TEXT = '各學年、科任各一位';
 // 「軟體清單」分頁的預設內容 (分頁不存在時也以此為準)
 // 欄位：軟體名稱、可用授權數、分配方式 (序號 = 從序號列表取號；帳號 = 直接開通在登記的帳號)、申請限制 (有填 = 每組限一位)
 const DEFAULT_SOFTWARE = [
-  ['Wayground (Quizizz)', 5, MODE.SERIAL, ''],
-  ['Kahoot 教師版', 5, MODE.SERIAL, ''],
-  ['Padlet 學校版', 10, MODE.SERIAL, ''],
+  ['Wayground (Quizizz)', 5, MODE.ACCOUNT, ''],
+  ['Kahoot 教師版', 5, MODE.ACCOUNT, ''],
+  ['Padlet 學校版', 10, MODE.ACCOUNT, ''],
   ['Wordwall 專業版', 10, MODE.ACCOUNT, ''],
   ['HiTeach 專業版', 15, MODE.SERIAL, ''],
   ['Google AI Pro 教育版', 7, MODE.ACCOUNT, LIMIT_PER_GROUP_TEXT]
@@ -52,10 +65,10 @@ const STATUS = { OK: '正取', WAIT: '備取', INELIGIBLE: '不符資格', CANCE
 
 // 「申請登記」分頁欄位 (1 起算)
 const COL = {
-  TIME: 1, NAME: 2, EMAIL: 3, GROUP: 4, SOFTWARE: 5, STATUS: 6,
-  RANK: 7, APPROVED: 8, SERIAL: 9, ISSUED_AT: 10, NOTE: 11
+  TIME: 1, NAME: 2, EMAIL: 3, IDENTITY: 4, SOFTWARE: 5, STATUS: 6,
+  RANK: 7, APPROVED: 8, SERIAL: 9, ISSUED_AT: 10, NOTE: 11, WORKSPACE: 12
 };
-const REG_HEADERS = ['登記時間', '姓名', 'Email', '身分', '軟體', '狀態', '順位', '核准', '序號', '發放時間', '備註'];
+const REG_HEADERS = ['登記時間', '姓名', 'Google 帳號', '職務', '軟體', '狀態', '順位', '核准', '序號', '發放時間', '備註', '學校帳號'];
 
 const SCHOOL_SIGNATURE = '臺中市北區立人國民小學 資訊組 敬上';
 
@@ -67,6 +80,11 @@ function onFormSubmit(e) {
   // 檢查事件物件 e 是否存在。不存在代表是手動執行，而非由表單提交觸發。
   if (!e || !e.namedValues) {
     Logger.log("此函式應由 Google 表單提交觸發，請勿手動執行。");
+    return;
+  }
+  // 只處理 setupForm() 建立的那份表單；舊表單或其他表單的回應一律忽略，避免重複紀錄
+  if (!isEnrollmentResponseSheet_(e.range ? e.range.getSheet() : null)) {
+    Logger.log("此筆回應不是來自授權申請表單 (或尚未執行 setupForm 建立表單)，不處理。");
     return;
   }
   Logger.log("收到新的表單提交，資料如下：");
@@ -100,14 +118,14 @@ function onFormSubmit(e) {
 
     // 登記已寫入試算表；回條寄送失敗只通知管理者，不視為登記失敗
     const outcomes = buildOutcomes_(result.rows, sub, result.added);
-    let receiptProblem = isEmail_(sub.email) ? '' : 'Email 格式有誤';
+    let receiptProblem = isEmail_(sub.email) ? '' : 'Google 帳號格式有誤';
     if (!receiptProblem) {
       try {
-        MailApp.sendEmail({
+        MailApp.sendEmail(withCc_({
           to: sub.email,
           subject: "【已登記】教學軟體授權申請",
           htmlBody: buildReceiptHtml_(sub, outcomes)
-        });
+        }, sub.email, sub.workspace));
         Logger.log("登記回條已寄出：" + sub.email);
       } catch (mailError) {
         receiptProblem = String(mailError);
@@ -115,7 +133,7 @@ function onFormSubmit(e) {
     }
     if (receiptProblem) {
       MailApp.sendEmail(ADMIN_EMAIL, "【提醒】教學軟體授權登記回條未寄出",
-        `${sub.name} (${sub.email}) 已完成登記，但回條未寄出：${receiptProblem}。請與申請人確認 Email。`);
+        `${sub.name} (${sub.email}) 已完成登記，但回條未寄出：${receiptProblem}。請與申請人確認帳號。`);
     }
 
     notifyAdminWhenFull_(outcomes, sub);
@@ -230,23 +248,74 @@ function parseSubmission_(namedValues, softwareList, time) {
   const name = answerOf_(namedValues, Q_NAME);
   const email = answerOf_(namedValues, Q_EMAIL);
   const software = answerOf_(namedValues, Q_SOFTWARE);
-  const group = answerOf_(namedValues, Q_GROUP);
+  const role = answerOf_(namedValues, Q_ROLE);
 
   const missing = [];
   if (name === null) missing.push(Q_NAME);
   if (email === null) missing.push(Q_EMAIL);
+  if (role === null) missing.push(Q_ROLE);
   if (software === null) missing.push(Q_SOFTWARE);
   if (missing.length > 0) {
     throw new Error('表單找不到題目：「' + missing.join('」、「') + '」。目前表單題目為：' +
-      Object.keys(namedValues).join('、') + '。請執行選單「授權管理 → 建立／更新申請表單」，或修改 code.gs 的 Q_ 設定。');
+      Object.keys(namedValues).join('、') + '。請確認表單題目未被改名，或修改 code.gs 的 Q_ 設定。');
   }
+  const identity = buildIdentity_(role,
+    answerOf_(namedValues, Q_GRADE), answerOf_(namedValues, Q_SUBJECT), answerOf_(namedValues, Q_OFFICE));
   return {
     time: time || new Date(),
     name: name,
     email: email,
-    group: group === null ? '' : group,
+    identity: identity,
+    group: groupOf_(identity),
+    workspace: answerOf_(namedValues, Q_WORKSPACE) || '',
     selections: parseSoftwareSelection_(software, softwareList)
   };
+}
+
+/**
+ * 職務文字：「學年／三年級」「科任／自然」「行政／教務處」。
+ * 只採用與職務對應的那一題，其他分支留下的舊答案不採用。
+ */
+function buildIdentity_(role, grade, subject, office) {
+  const text = String(role == null ? '' : role).trim();
+  let detail = '';
+  if (text.indexOf(ROLE.GRADE) >= 0) detail = grade;
+  else if (text.indexOf(ROLE.SUBJECT) >= 0) detail = subject;
+  else if (text.indexOf(ROLE.OFFICE) >= 0) detail = office;
+  const base = [ROLE.GRADE, ROLE.SUBJECT, ROLE.OFFICE].filter(function (r) { return text.indexOf(r) >= 0; })[0] || text;
+  detail = String(detail == null ? '' : detail).trim();
+  return detail ? base + '／' + detail : base;
+}
+
+/** 「每組限一位」用的組別：學年 → 該年級；科任 → 科任；其餘 (行政) → 職務本身。 */
+function groupOf_(identity) {
+  const parts = String(identity == null ? '' : identity).split('／');
+  const base = parts[0].trim();
+  if (base === ROLE.GRADE) return (parts[1] || '').trim();
+  return base;
+}
+
+/** 副本收件人：有填學校帳號、格式正確、且與主要帳號不同時才加。 */
+function ccFor_(email, workspace) {
+  if (!isEmail_(workspace)) return '';
+  return normalize_(workspace) === normalize_(email) ? '' : String(workspace).trim();
+}
+
+function withCc_(message, email, workspace) {
+  const cc = ccFor_(email, workspace);
+  if (cc) message.cc = cc;
+  return message;
+}
+
+/** 登記時寫入備註欄的提醒。 */
+function registrationNote_(sub, software) {
+  const notes = [];
+  if (!isEmail_(sub.email)) notes.push('Google 帳號格式有誤，無法寄送通知');
+  if (software === WORKSPACE_ACCOUNT_SOFTWARE) {
+    if (!isEmail_(sub.workspace)) notes.push('未填學校帳號');
+    else if (normalize_(sub.workspace).slice(-(SCHOOL_DOMAIN.length + 1)) !== '@' + SCHOOL_DOMAIN) notes.push('學校帳號非 @' + SCHOOL_DOMAIN);
+  }
+  return notes.join('；');
 }
 
 /**
@@ -425,9 +494,14 @@ function buildReceiptHtml_(sub, outcomes) {
   const items = outcomes.map(function (outcome) {
     return '<li><b>' + escapeHtml_(outcome.software) + '</b>：' + escapeHtml_(describeOutcome_(outcome)) + '</li>';
   }).join('');
+  const needsWorkspace = !isEmail_(sub.workspace) && outcomes.some(function (outcome) {
+    return outcome.software === WORKSPACE_ACCOUNT_SOFTWARE && outcome.status !== STATUS.INELIGIBLE;
+  });
   return '<p>親愛的 ' + escapeHtml_(sub.name) + ' 老師，您好：</p>' +
     '<p>已收到您的教學軟體授權登記，結果如下：</p>' +
     '<ul>' + items + '</ul>' +
+    (needsWorkspace ? '<p>您申請了 ' + escapeHtml_(WORKSPACE_ACCOUNT_SOFTWARE) + '，但未填寫學校帳號（@' + SCHOOL_DOMAIN +
+      '）。這項授權需開通在學校帳號，請洽資訊組補填。</p>' : '') +
     '<p>目前<b>尚未發放授權</b>。資訊組審核後，將另行寄信通知授權序號或開通方式。</p>' +
     '<br><p>' + SCHOOL_SIGNATURE + '</p>' +
     '<p style="color: grey; font-size: 12px;">此為系統自動發送信件，請勿直接回覆。</p>';
@@ -466,22 +540,24 @@ function readRegistrations_(sheet) {
       time: v[COL.TIME - 1],
       name: String(v[COL.NAME - 1]).trim(),
       email: String(v[COL.EMAIL - 1]).trim(),
-      group: String(v[COL.GROUP - 1]).trim(),
+      identity: String(v[COL.IDENTITY - 1]).trim(),
+      group: groupOf_(v[COL.IDENTITY - 1]),
       software: String(v[COL.SOFTWARE - 1]).trim(),
       status: String(v[COL.STATUS - 1]).trim(),
       rank: v[COL.RANK - 1],
       approved: v[COL.APPROVED - 1] === true,
       serial: String(v[COL.SERIAL - 1]).trim(),
       issuedAt: v[COL.ISSUED_AT - 1],
-      note: String(v[COL.NOTE - 1]).trim()
+      note: String(v[COL.NOTE - 1]).trim(),
+      workspace: String(v[COL.WORKSPACE - 1]).trim()
     };
   });
 }
 
 function appendRegistrations_(sheet, sub, softwareNames) {
-  const note = isEmail_(sub.email) ? '' : 'Email 格式有誤，無法寄送通知';
   const values = softwareNames.map(function (software) {
-    return [sub.time, sub.name, sub.email, sub.group, software, '', '', false, '', '', note];
+    return [sub.time, sub.name, sub.email, sub.identity, software, '', '', false, '', '',
+      registrationNote_(sub, software), sub.workspace];
   });
   const startRow = sheet.getLastRow() + 1;
   sheet.getRange(startRow, 1, values.length, REG_HEADERS.length).setValues(values);
@@ -508,6 +584,43 @@ function refreshStats_(ss, softwareList, rows) {
   sheet.getRange(values.length + 2, 1).setValue('更新時間：' + nowText_());
   sheet.setFrozenRows(1);
   return stats;
+}
+
+/**
+ * 這個分頁是否為 setupForm() 所建立表單的回應分頁。
+ * 尚未建立表單時一律回傳 false，所以舊表單的回應不會被登記。
+ */
+function isEnrollmentResponseSheet_(sheet) {
+  const props = PropertiesService.getScriptProperties();
+  const formId = props.getProperty(PROP.FORM_ID);
+  if (!formId || !sheet) return false;
+  const cached = props.getProperty(PROP.RESPONSE_SHEET_ID);
+  if (cached) return String(sheet.getSheetId()) === cached;
+  // 建立表單當下還找不到回應分頁時，改在第一次收到回應時比對並記住
+  let match = false;
+  try {
+    const url = sheet.getFormUrl();
+    match = !!url && FormApp.openByUrl(url).getId() === formId;
+  } catch (error) {
+    Logger.log("比對表單失敗：" + error);
+  }
+  if (match) props.setProperty(PROP.RESPONSE_SHEET_ID, String(sheet.getSheetId()));
+  return match;
+}
+
+/** 授權申請表單的回應分頁；找不到回傳 null。 */
+function getResponseSheet_(ss) {
+  const sheets = ss.getSheets();
+  for (let i = 0; i < sheets.length; i++) {
+    if (sheets[i].getFormUrl() && isEnrollmentResponseSheet_(sheets[i])) return sheets[i];
+  }
+  return null;
+}
+
+/** setupForm() 建立的表單；尚未建立回傳 null。 */
+function getEnrollmentForm_() {
+  const formId = PropertiesService.getScriptProperties().getProperty(PROP.FORM_ID);
+  return formId ? FormApp.openById(formId) : null;
 }
 
 function nowText_() {

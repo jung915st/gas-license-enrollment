@@ -1,7 +1,7 @@
 # gas-license-enrollment
 
 教學軟體授權登記與分配系統：Google Apps Script 綁定在表單回應試算表上。
-老師送出表單只做登記，系統依登記先後排定正取／備取並在表單上顯示剩餘名額；
+老師在新建立的申請表單送出後只做登記，系統依登記先後排定正取／備取並在表單上顯示剩餘名額；
 管理者在試算表勾選核准後，才從「序號列表」發放序號並寄信通知。
 
 功能、分頁欄位與管理者操作見 [部署說明.md](部署說明.md)。
@@ -12,7 +12,7 @@
 |---|---|
 | `code.gs` | 設定、表單送出登記、正取／備取排序、統計 |
 | `allocate.gs` | 「授權管理」選單、發放、通知、補登 |
-| `setupForm.gs` | 初始化分頁、建立／更新申請表單、觸發器 |
+| `setupForm.gs` | 初始化分頁、建立新申請表單（職務跳題）、觸發器 |
 | `confirm.gs`、`index.html` | Wordwall 帳號確認網頁 |
 | `tests_enrollment.gs` | Apps Script 內的離線單元測試 `runEnrollmentTests()` |
 | `test/run-tests.js` | 以 Node 模擬 Apps Script 執行完整流程 |

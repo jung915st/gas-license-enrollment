@@ -25,7 +25,7 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(SpreadsheetApp.getUi().createMenu('初次設定')
       .addItem('1. 初始化分頁', 'setupSheets')
-      .addItem('2. 建立／更新申請表單', 'setupForm')
+      .addItem('2. 建立新申請表單（已建立則更新選項）', 'setupForm')
       .addItem('3. 建立表單提交觸發', 'createFormSubmitTrigger'))
     .addToUi();
 }
@@ -74,14 +74,14 @@ function menuIssueApproved() {
     notify_('沒有可發放的名單。\n\n' + describePlan_(preview));
     return;
   }
-  const recipients = uniqueEmails_(preview.issue);
+  const recipients = recipientCount_(preview.issue);
   const mailQuota = MailApp.getRemainingDailyQuota();
-  if (recipients.length > mailQuota) {
-    notify_('今日剩餘寄信額度為 ' + mailQuota + ' 封，不足以通知 ' + recipients.length +
-      ' 位申請人。請明天再發放，或先取消部分核准勾選。');
+  if (recipients.addresses > mailQuota) {
+    notify_('今日剩餘寄信額度為 ' + mailQuota + ' 個收件人，不足以通知 ' + recipients.people +
+      ' 位申請人（含副本共 ' + recipients.addresses + ' 個收件人）。請明天再發放，或先取消部分核准勾選。');
     return;
   }
-  if (!confirm_('發放授權', describePlan_(preview) + '\n\n確定發放並寄信通知 ' + recipients.length + ' 位申請人嗎？')) return;
+  if (!confirm_('發放授權', describePlan_(preview) + '\n\n確定發放並寄信通知 ' + recipients.people + ' 位申請人嗎？')) return;
 
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -108,6 +108,9 @@ function menuBackfill() {
   let added;
   try {
     added = backfillFromResponses_(ss);
+  } catch (error) {
+    notify_(String(error.message || error));
+    return;
   } finally {
     lock.releaseLock();
   }
@@ -255,12 +258,26 @@ function issueKey_(row) {
   return row.rowIndex + '|' + normalize_(row.email) + '|' + row.software;
 }
 
-function uniqueEmails_(issueItems) {
-  const seen = {};
+/** 申請人數與實際收件人數 (副本也佔寄信額度)。 */
+function recipientCount_(issueItems) {
+  const people = {};
+  const addresses = {};
   issueItems.forEach(function (item) {
-    if (isEmail_(item.row.email)) seen[normalize_(item.row.email)] = true;
+    if (!isEmail_(item.row.email)) return;
+    people[normalize_(item.row.email)] = true;
+    addresses[normalize_(item.row.email)] = true;
+    const cc = ccFor_(item.row.email, item.row.workspace);
+    if (cc) addresses[normalize_(cc)] = true;
   });
-  return Object.keys(seen);
+  return { people: Object.keys(people).length, addresses: Object.keys(addresses).length };
+}
+
+/** 這位申請人留下的學校帳號 (同一人的任何一筆登記有填即可)。 */
+function workspaceOf_(items) {
+  for (let i = 0; i < items.length; i++) {
+    if (isEmail_(items[i].row.workspace)) return items[i].row.workspace;
+  }
+  return '';
 }
 
 /** 寫入序號與狀態，再依申請人合併寄出一封通知信。 */
@@ -293,12 +310,13 @@ function executeIssue_(ss, plan) {
     const items = byEmail[key];
     const first = items[0].row;
     try {
-      if (!isEmail_(first.email)) throw new Error('Email 格式有誤');
-      MailApp.sendEmail({
+      if (!isEmail_(first.email)) throw new Error('Google 帳號格式有誤');
+      const workspace = workspaceOf_(items);
+      MailApp.sendEmail(withCc_({
         to: first.email,
         subject: "【授權核准】教學軟體授權已發放",
-        htmlBody: buildIssueHtml_(first.name, first.email, items)
-      });
+        htmlBody: buildIssueHtml_(first.name, first.email, workspace, items)
+      }, first.email, workspace));
       sent++;
     } catch (error) {
       failed.push(first.name + ' (' + first.email + ')：' + error);
@@ -324,11 +342,14 @@ function executeIssue_(ss, plan) {
   return lines.join('\n');
 }
 
-function buildIssueHtml_(name, email, items) {
+function buildIssueHtml_(name, email, workspace, items) {
   const list = items.map(function (item) {
+    const useWorkspace = item.row.software === WORKSPACE_ACCOUNT_SOFTWARE && isEmail_(workspace);
     const detail = item.mode === MODE.SERIAL
       ? '授權序號：<b>' + escapeHtml_(item.serial) + '</b>'
-      : '授權將開通於您登記的帳號（' + escapeHtml_(email) + '），開通後即可使用';
+      : (useWorkspace
+        ? '授權將開通於您的學校帳號（' + escapeHtml_(workspace) + '），開通後即可使用'
+        : '授權將開通於您登記的 Google 帳號（' + escapeHtml_(email) + '），開通後以該帳號登入即可使用');
     return '<li><b>' + escapeHtml_(item.row.software) + '</b>－' + detail + '</li>';
   }).join('');
   return '<p>親愛的 ' + escapeHtml_(name) + ' 老師，您好：</p>' +
@@ -360,18 +381,17 @@ function syncAccountSheet_(ss, row) {
 // =====================================================================
 
 /**
- * 把表單回應中、登記起算時間之後、尚未登記的申請補進「申請登記」。
- * 同一 Email＋軟體不會重複登記，可重複執行；不寄送回條。
+ * 把授權申請表單的回應分頁中、尚未登記的申請補進「申請登記」。
+ * 只讀 setupForm() 所建立表單的回應分頁，舊表單的回應不會被匯入。
+ * 同一帳號＋軟體不會重複登記，可重複執行；不寄送回條。
  * @returns {number} 新增的登記筆數
  */
 function backfillFromResponses_(ss) {
-  const startText = PropertiesService.getScriptProperties().getProperty('ENROLL_REG_START');
-  if (!startText) {
-    throw new Error('尚未設定登記起算時間，請先執行選單「初次設定 → 1. 初始化分頁」。');
-  }
-  const start = new Date(startText).getTime();
   const responseSheet = getResponseSheet_(ss);
-  if (!responseSheet || responseSheet.getLastRow() < 2) return 0;
+  if (!responseSheet) {
+    throw new Error('找不到授權申請表單的回應分頁，請先執行選單「初次設定 → 2. 建立新申請表單」。');
+  }
+  if (responseSheet.getLastRow() < 2) return 0;
 
   const softwareList = getSoftwareList_(ss);
   const values = responseSheet.getRange(1, 1, responseSheet.getLastRow(), responseSheet.getLastColumn()).getValues();
@@ -380,7 +400,6 @@ function backfillFromResponses_(ss) {
 
   for (let r = 1; r < values.length; r++) {
     const time = values[r][0];
-    if (timeValue_(time) < start) continue;
     const namedValues = {};
     headers.forEach(function (header, c) {
       const key = String(header);
@@ -397,17 +416,6 @@ function backfillFromResponses_(ss) {
     added += processSubmission_(ss, sub, softwareList).added.length;
   }
   return added;
-}
-
-/** 表單回應分頁：優先用 RESPONSE_SHEET_NAME，否則用第一個有連結表單的分頁。 */
-function getResponseSheet_(ss) {
-  const named = ss.getSheetByName(RESPONSE_SHEET_NAME);
-  if (named && named.getFormUrl()) return named;
-  const sheets = ss.getSheets();
-  for (let i = 0; i < sheets.length; i++) {
-    if (sheets[i].getFormUrl()) return sheets[i];
-  }
-  return named || null;
 }
 
 // =====================================================================
