@@ -90,7 +90,7 @@ function runEnrollmentTests() {
   const officeExtra = {}; officeExtra[Q_OFFICE] = '教務處';
   const officeSub = answers('行政', officeExtra);
   check('行政：職務與組別', [officeSub.identity, officeSub.group], ['行政／教務處', '行政']);
-  check('行政不在可申請組別內', LIMITED_GROUPS.indexOf(officeSub.group), -1);
+  check('行政 (含幼兒園) 是可申請的一組', [LIMITED_GROUPS.indexOf(officeSub.group) >= 0, groupOf_('行政／幼兒園')], [true, '行政']);
   const kgExtra = {}; kgExtra[Q_OFFICE] = '幼兒園';
   const kgSub = answers('行政', kgExtra);
   check('行政／幼兒園：職務與組別', [kgSub.identity, kgSub.group], ['行政／幼兒園', '行政']);
@@ -155,12 +155,13 @@ function runEnrollmentTests() {
     reg(2, 'b@x.tw', '一年級', 'Google AI Pro 教育版'),
     reg(3, 'c@x.tw', '科任', 'Google AI Pro 教育版'),
     reg(4, 'd@x.tw', '行政', 'Google AI Pro 教育版'),
-    reg(5, 'e@x.tw', '', 'Google AI Pro 教育版')
+    reg(5, 'e@x.tw', '', 'Google AI Pro 教育版'),
+    reg(6, 'f@x.tw', '行政', 'Google AI Pro 教育版')
   ]);
-  check('同組第二位備取、行政與未填不符資格', statuses(ai), ['正取1', '備取1', '正取2', '不符資格', '不符資格']);
+  check('同組第二位備取 (含行政)、未填職務不符資格', statuses(ai), ['正取1', '備取1', '正取2', '正取3', '不符資格', '備取2']);
 
   const aiStats = computeStats_(ai, softwareList).filter(function (s) { return s.name === 'Google AI Pro 教育版'; })[0];
-  check('限制型軟體剩餘名額', aiStats.remaining, 5);
+  check('限制型軟體剩餘名額 (7 − 3 正取，尚有 5 組可申請)', aiStats.remaining, 4);
   check('限制型軟體尚可申請組別', aiStats.openGroups, ['二年級', '三年級', '四年級', '五年級', '六年級']);
 
   // --- 統計與剩餘名額文字 ---
@@ -176,7 +177,7 @@ function runEnrollmentTests() {
   check('不限名額：30 人全部正取', applyRank(unlimited).every(function (row) { return row.status === STATUS.OK; }), true);
   check('不限名額：統計顯示「不限」',
     quotaText_(computeStats_(unlimited, softwareList).filter(function (st) { return st.name === 'TeacherSay 專業版'; })[0].remaining), '不限');
-  check('剩餘文字：限制型', text.indexOf('・Google AI Pro 教育版：剩餘 5／7｜限各學年、科任各一位，尚可申請：二年級') >= 0, true);
+  check('剩餘文字：限制型', text.indexOf('・Google AI Pro 教育版：剩餘 4／7｜限各學年、科任、行政各一位，尚可申請：二年級') >= 0, true);
 
   // --- 重複登記 ---
   const existing = applyRank([reg(1, 'Dup@x.tw', '科任', 'Kahoot 教師版'), reg(2, 'gone@x.tw', '科任', 'Kahoot 教師版')]);
@@ -206,7 +207,9 @@ function runEnrollmentTests() {
     reg(7, 'p1@x.tw', '一年級', 'Google AI Pro 教育版', { approved: true }),
     reg(8, 'p2@x.tw', '一年級', 'Google AI Pro 教育版', { approved: true }),
     reg(9, 'p5@x.tw', '行政', 'Google AI Pro 教育版', { approved: true }),
-    reg(10, 'p6@x.tw', '科任', 'Padlet 學校版', { approved: true })
+    reg(10, 'p6@x.tw', '科任', 'Padlet 學校版', { approved: true }),
+    reg(11, 'p7@x.tw', '', 'Google AI Pro 教育版', { approved: true }),
+    reg(12, 'p8@x.tw', '行政', 'Google AI Pro 教育版', { approved: true })
   ]);
   // 發放計畫用獨立的清單：Kahoot、Padlet、HiTeach 取序號，Wordwall、Google AI Pro 開通帳號
   const issueList = parseSoftwareRows_([
@@ -217,13 +220,14 @@ function runEnrollmentTests() {
   check('發放：序號依軟體配對，舊序號不重發',
     plan.issue.map(function (item) { return item.row.email + '|' + item.row.software + '|' + item.serial; }),
     ['p1@x.tw|HiTeach 專業版|HT-1', 'p2@x.tw|HiTeach 專業版|HT-2', 'p1@x.tw|Kahoot 教師版|KH-1',
-      'p1@x.tw|Wordwall 專業版|', 'p1@x.tw|Google AI Pro 教育版|']);
+      'p1@x.tw|Wordwall 專業版|', 'p1@x.tw|Google AI Pro 教育版|', 'p5@x.tw|Google AI Pro 教育版|']);
   check('發放：略過原因',
     plan.skipped.map(function (item) { return item.row.email + '|' + item.row.software + '|' + item.reason; }),
     ['p3@x.tw|HiTeach 專業版|「序號列表」沒有可用序號',
       'p2@x.tw|Google AI Pro 教育版|一年級已有一位取得授權',
-      'p5@x.tw|Google AI Pro 教育版|身分不符（限各學年、科任各一位）',
-      'p6@x.tw|Padlet 學校版|「序號列表」沒有可用序號']);
+      'p6@x.tw|Padlet 學校版|「序號列表」沒有可用序號',
+      'p7@x.tw|Google AI Pro 教育版|身分不符（限各學年、科任、行政各一位）',
+      'p8@x.tw|Google AI Pro 教育版|行政已有一位取得授權']);
   check('發放：未勾選核准者不處理',
     plan.issue.concat(plan.skipped).some(function (item) { return item.row.email === 'p4@x.tw'; }), false);
 

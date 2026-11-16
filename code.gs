@@ -7,6 +7,7 @@
 //       並副本給 Google AI Pro 的學校帳號。
 // v3.2：TeacherSay 專業版為必選 (未勾選無法送出)；Google AI Pro 改為「是／否」題，
 //       選「是」才進入學校帳號頁且必填；行政處室加「幼兒園」；可用授權數可填「不限」。
+//       行政 (含幼兒園) 也可申請 Google AI Pro，與科任一樣整組限一位。
 //
 // 檔案分工：
 //   code.gs             設定、表單送出登記、正取／備取排序、統計
@@ -41,8 +42,8 @@ const ROLE = { GRADE: '學年', SUBJECT: '科任', OFFICE: '行政' };
 const GRADE_CHOICES = ['一年級', '二年級', '三年級', '四年級', '五年級', '六年級'];
 const OFFICE_CHOICES = ['教務處', '學務處', '總務處', '輔導室', '幼兒園'];
 
-// 「每組限一位」軟體可申請的組別：各學年＋科任 (行政不可申請)
-const LIMITED_GROUPS = GRADE_CHOICES.concat([ROLE.SUBJECT]);
+// 「每組限一位」軟體可申請的組別：各學年、科任、行政 (科任不分科目、行政不分處室，各算一組)
+const LIMITED_GROUPS = GRADE_CHOICES.concat([ROLE.SUBJECT, ROLE.OFFICE]);
 
 // 以學校帳號開通的軟體：表單上獨立成「是／否」題，通知信會寫明開通在學校帳號
 const WORKSPACE_ACCOUNT_SOFTWARE = 'Google AI Pro 教育版';
@@ -57,7 +58,7 @@ const UNLIMITED_TEXT = '不限';
 const PROP = { FORM_ID: 'ENROLL_FORM_ID', RESPONSE_SHEET_ID: 'ENROLL_RESPONSE_SHEET_ID', PREFILL_URL: 'ENROLL_PREFILL_URL' };
 
 const MODE = { SERIAL: '序號', ACCOUNT: '帳號' };
-const LIMIT_PER_GROUP_TEXT = '各學年、科任各一位';
+const LIMIT_PER_GROUP_TEXT = '各學年、科任、行政各一位';
 
 // 「軟體清單」分頁的預設內容 (分頁不存在時也以此為準)
 // 欄位：軟體名稱、可用授權數、分配方式 (序號 = 從序號列表取號；帳號 = 直接開通在登記的帳號)、申請限制 (有填 = 每組限一位)
