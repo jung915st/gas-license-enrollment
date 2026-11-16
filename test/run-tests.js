@@ -95,8 +95,9 @@ class Item {
   setChoices(list) { this.choices = Array.from(list, (c) => c.value); this.nav = Array.from(list, (c) => c.nav); return this; }
   setGoToPage(page) {
     assert.strictEqual(this.type, ItemType.PAGE_BREAK);
-    assert.ok(page instanceof Item && page.type === ItemType.PAGE_BREAK, 'setGoToPage needs a PageBreakItem');
-    this.goTo = page; return this;
+    assert.ok(page === 'SUBMIT' || page === 'CONTINUE' || (page instanceof Item && page.type === ItemType.PAGE_BREAK),
+      'setGoToPage needs a PageBreakItem or a PageNavigationType');
+    this.goTo = page === 'CONTINUE' ? undefined : page; return this;
   }
   setValidation(v) { this.validation = v; return this; }
   createResponse(values) { assert.strictEqual(this.type, ItemType.CHECKBOX); return { item: this, values: Array.from(values) }; }
@@ -254,8 +255,8 @@ function answersOf(who, software, opts) {
     [Q.name]: who.name, [Q.email]: who.email, [Q.role]: who.role,
     [Q.teacherSay]: opts.noTeacherSay ? '' : TS,
     [Q.software]: list.filter((x) => x !== AI && x !== TS).join(', '),
-    [Q.aiPro]: ai ? '是' : '否',
-    [Q.workspace]: ai ? (who.workspace || '') : '',
+    [Q.aiPro]: who.role === '行政' ? '' : (ai ? '是' : '否'),
+    [Q.workspace]: who.role !== '行政' && ai ? (who.workspace || '') : '',
   };
   a[{ 學年: Q.grade, 科任: Q.subject, 行政: Q.office }[who.role]] = who.detail;
   return a;
@@ -328,13 +329,15 @@ function walkForm(form, answers) {
     if (next === null) {
       if (idx + 1 >= sections.length) return { visited, submitted: true };
       const pb = sections[idx + 1][0];
+      if (pb.goTo === 'SUBMIT') return { visited, submitted: true };
       next = pb.goTo ? sections.findIndex((x) => x[0] === pb.goTo) : idx + 1;
     }
     idx = next;
   }
   throw new Error('form navigation loops');
 }
-const SOFTWARE_LAYOUT = ['#【TeacherSay 專業版】', Q.teacherSay, '#申請軟體授權', Q.software, Q.aiPro, '#【Google AI Pro 教育版】', Q.workspace];
+const FORM_LAYOUT = [Q.name, Q.email, '#【TeacherSay 專業版】', Q.teacherSay, '#申請軟體授權', Q.software, '#【職務】', Q.role,
+  '#【學年】', Q.grade, '#【科任】', Q.subject, '#【行政】', Q.office, '#【Google AI Pro 教育版】', Q.aiPro, '#【Google AI Pro 學校帳號】', Q.workspace];
 const titlesOf = (form) => form.items.map((i) => (i.type === 'PAGE_BREAK' ? '#' + i.title : i.title));
 
 // ============ 1. unit tests shipped to the user ============
@@ -346,20 +349,23 @@ ok('runEnrollmentTests (shipped unit tests)', () => {
 });
 
 // ============ 2. a brand-new form, old form untouched ============
-ok('setupForm creates a NEW form: role branches, TeacherSay gate, AI Pro branch, prefilled link; old form untouched', () => {
+ok('setupForm creates a NEW form: TeacherSay gate, software, role branches, AI Pro for 學年/科任 only, prefilled link', () => {
   const { E, oldForm, oldSheet, form, sheet, lic } = readyEnv();
   assert.strictEqual(E.createdForms.length, 1);
   assert.notStrictEqual(form, oldForm);
   assert.deepStrictEqual(oldForm.items.map((i) => i.title), ['您的大名', '您的常用email信箱', '您的職務', '您要申請的軟體授權']);
   assert.strictEqual(oldSheet.getLastRow(), 2);
 
-  assert.deepStrictEqual(titlesOf(form), [Q.name, Q.email, Q.role, '#【學年】', Q.grade, '#【科任】', Q.subject, '#【行政】', Q.office]
-    .concat(SOFTWARE_LAYOUT));
+  assert.deepStrictEqual(titlesOf(form), FORM_LAYOUT);
   assert.ok(form.description.includes('本次軟體使用申請需協助提交使用成果，同時配合取得並使用TeacherSay。'));
   const role = item(form, Q.role);
   const page = (t) => form.items.find((i) => i.type === 'PAGE_BREAK' && i.title === t);
   assert.deepStrictEqual(role.nav, [page('【學年】'), page('【科任】'), page('【行政】')]);
   assert.deepStrictEqual(item(form, Q.office).choices, ['教務處', '學務處', '總務處', '輔導室', '幼兒園']);
+  assert.ok(page('【行政】').help.includes('由資訊組另行分配'));
+  assert.strictEqual(page('【科任】').goTo, page('【Google AI Pro 教育版】'), 'after 學年 -> AI Pro');
+  assert.strictEqual(page('【行政】').goTo, page('【Google AI Pro 教育版】'), 'after 科任 -> AI Pro');
+  assert.strictEqual(page('【Google AI Pro 教育版】').goTo, 'SUBMIT', 'after 行政 -> submit');
   assert.strictEqual(item(form, Q.subject).type, 'TEXT');
 
   const ts = item(form, Q.teacherSay);
@@ -370,7 +376,7 @@ ok('setupForm creates a NEW form: role branches, TeacherSay gate, AI Pro branch,
   assert.deepStrictEqual(sw.choices, ['Wayground (Quizizz)', 'Kahoot 教師版', 'Padlet 學校版', 'Wordwall 專業版', 'HiTeach 專業版']);
   assert.ok(sw.help.includes('・TeacherSay 專業版：不限名額（每位申請者必選）') && sw.help.includes('・HiTeach 專業版：剩餘 15／15'));
   const ai = item(form, Q.aiPro);
-  assert.deepStrictEqual([ai.type, ai.required, ai.choices, ai.nav], ['MULTIPLE_CHOICE', true, ['是', '否'], [page('【Google AI Pro 教育版】'), 'SUBMIT']]);
+  assert.deepStrictEqual([ai.type, ai.required, ai.choices, ai.nav], ['MULTIPLE_CHOICE', true, ['是', '否'], [page('【Google AI Pro 學校帳號】'), 'SUBMIT']]);
   const ws = item(form, Q.workspace);
   assert.deepStrictEqual([ws.type, ws.required, ws.validation.kind], ['TEXT', true, 'pattern']);
   assert.ok(new RegExp(ws.validation.pattern).test('a' + SCHOOL) && !new RegExp(ws.validation.pattern).test('a@gmail.com'));
@@ -393,28 +399,30 @@ ok('setupForm creates a NEW form: role branches, TeacherSay gate, AI Pro branch,
   E.ss.getSheetByName('軟體清單').appendRow(['Canva 教育版', 3, '帳號', '']);
   E.call('setupForm()');
   assert.strictEqual(E.createdForms.length, 1);
-  assert.deepStrictEqual(titlesOf(form).slice(9), SOFTWARE_LAYOUT, 'no duplicated questions');
+  assert.deepStrictEqual(titlesOf(form), FORM_LAYOUT, 'no duplicated questions');
   assert.strictEqual(sw.choices[sw.choices.length - 1], 'Canva 教育版');
   assert.ok(sw.help.includes('・Canva 教育版：剩餘 3／3'));
 });
 
-ok('respondent paths: every role reaches TeacherSay; no TeacherSay = no software page; AI Pro needs a school account', () => {
+ok('respondent paths: TeacherSay gate first; 學年/科任 reach Google AI Pro; 行政 submits without ever seeing it', () => {
   const { form } = readyEnv();
-  const base = (role, detail) => answersOf({ name: '甲', email: 'a@gmail.com', role, detail, workspace: 'a' + SCHOOL }, '');
-  const G = '【學年】', S = '【科任】', O = '【行政】', T = '【TeacherSay 專業版】', W = '申請軟體授權', A = '【Google AI Pro 教育版】';
-  assert.deepStrictEqual(walkForm(form, base('學年', '三年級')), { visited: ['基本資料', G, T, W], submitted: true });
-  assert.deepStrictEqual(walkForm(form, base('科任', '自然')), { visited: ['基本資料', S, T, W], submitted: true });
-  assert.deepStrictEqual(walkForm(form, base('行政', '幼兒園')), { visited: ['基本資料', O, T, W], submitted: true });
+  const base = (role, detail) => answersOf({ name: '甲', email: 'a@gmail.com', role, detail, workspace: 'a' + SCHOOL }, 'Kahoot 教師版');
+  const T = '【TeacherSay 專業版】', W = '申請軟體授權', R = '【職務】', G = '【學年】', S = '【科任】', O = '【行政】',
+    AQ = '【Google AI Pro 教育版】', AW = '【Google AI Pro 學校帳號】';
+  assert.deepStrictEqual(walkForm(form, base('學年', '三年級')), { visited: ['基本資料', T, W, R, G, AQ], submitted: true });
+  assert.deepStrictEqual(walkForm(form, base('科任', '自然')), { visited: ['基本資料', T, W, R, S, AQ], submitted: true });
+  assert.deepStrictEqual(walkForm(form, base('行政', '幼兒園')), { visited: ['基本資料', T, W, R, O], submitted: true });
+  assert.deepStrictEqual(walkForm(form, base('行政', '教務處')).visited.indexOf(AQ), -1, '行政 never sees the AI Pro question');
   // TeacherSay unticked: stuck on the TeacherSay page, the software page is never shown
   const noTs = Object.assign(base('學年', '一年級'), { [Q.teacherSay]: '' });
-  assert.deepStrictEqual(walkForm(form, noTs), { visited: ['基本資料', G, T], submitted: false, blockedAt: Q.teacherSay });
+  assert.deepStrictEqual(walkForm(form, noTs), { visited: ['基本資料', T], submitted: false, blockedAt: Q.teacherSay });
   // AI Pro yes: the school-account page is shown and must hold a school account
   const aiYes = answersOf(teacher(1, '二年級', { workspace: 't1' + SCHOOL }), AI);
-  assert.deepStrictEqual(walkForm(form, aiYes), { visited: ['基本資料', G, T, W, A], submitted: true });
-  assert.deepStrictEqual(walkForm(form, Object.assign({}, aiYes, { [Q.workspace]: '' })).blockedAt, Q.workspace);
-  assert.deepStrictEqual(walkForm(form, Object.assign({}, aiYes, { [Q.workspace]: 't1@gmail.com' })).blockedAt, Q.workspace);
-  // AI Pro no: submitted straight from the software page
-  assert.strictEqual(walkForm(form, answersOf(teacher(1, '二年級'), 'Kahoot 教師版')).visited.indexOf(A), -1);
+  assert.deepStrictEqual(walkForm(form, aiYes), { visited: ['基本資料', T, W, R, G, AQ, AW], submitted: true });
+  assert.strictEqual(walkForm(form, Object.assign({}, aiYes, { [Q.workspace]: '' })).blockedAt, Q.workspace);
+  assert.strictEqual(walkForm(form, Object.assign({}, aiYes, { [Q.workspace]: 't1@gmail.com' })).blockedAt, Q.workspace);
+  // AI Pro must be answered by 學年/科任
+  assert.strictEqual(walkForm(form, Object.assign({}, aiYes, { [Q.aiPro]: '' })).blockedAt, Q.aiPro);
 });
 
 // ============ 3. upgrading the v3.1 form in place ============
@@ -454,26 +462,31 @@ ok('upgrade a v3.1 form in place: same form and tab, new questions slotted in, o
 
   assert.strictEqual(S.E.createdForms.length, 0, 'no new form');
   assert.strictEqual(S.E.props.ENROLL_RESPONSE_SHEET_ID, String(tab.id), 'same response tab');
-  assert.deepStrictEqual(titlesOf(f), [Q.name, Q.email, Q.role, '#【學年】', Q.grade, '#【科任】', Q.subject, '#【行政】', Q.office]
-    .concat(SOFTWARE_LAYOUT));
-  const tsPage = f.items.find((i) => i.title === '【TeacherSay 專業版】');
-  assert.strictEqual(pS.goTo, tsPage, '學年 section now goes to TeacherSay');
-  assert.strictEqual(pO.goTo, tsPage, '科任 section now goes to TeacherSay');
+  assert.deepStrictEqual(titlesOf(f), FORM_LAYOUT);
+  const aiPage = f.items.find((i) => i.title === '【Google AI Pro 教育版】');
+  assert.strictEqual(pS.goTo, aiPage, '學年 section now goes to AI Pro');
+  assert.strictEqual(pO.goTo, aiPage, '科任 section now goes to AI Pro');
+  assert.strictEqual(aiPage.goTo, 'SUBMIT', '行政 section now submits');
+  assert.strictEqual(pW.goTo, undefined);
+  assert.deepStrictEqual(role.nav, [pG, pS, pO], 'role choices still jump to their sections');
   assert.deepStrictEqual(item(f, Q.office).choices.slice(-1), ['幼兒園']);
   assert.deepStrictEqual(item(f, Q.software).choices, ['Wayground (Quizizz)', 'Kahoot 教師版', 'Padlet 學校版', 'Wordwall 專業版', 'HiTeach 專業版']);
   assert.strictEqual(item(f, Q.software).required, false);
   assert.strictEqual(item(f, Q.workspace).required, true);
   assert.ok(S.E.alerts[S.E.alerts.length - 1].includes('已更新申請表單') && S.E.alerts[S.E.alerts.length - 1].includes('新增「' + Q.teacherSay + '」'));
   const walked = walkForm(f, answersOf({ name: '甲', email: 'a@gmail.com', role: '行政', detail: '幼兒園' }, 'Padlet 學校版'));
-  assert.deepStrictEqual(walked.visited, ['基本資料', '【行政】', '【TeacherSay 專業版】', '申請軟體授權']);
+  assert.deepStrictEqual(walked, { visited: ['基本資料', '【TeacherSay 專業版】', '申請軟體授權', '【職務】', '【行政】'], submitted: true });
 
   // the pre-upgrade response was registered by the trigger; a new one goes through the new questions
   let rows = regRows(S.E);
   assert.deepStrictEqual(rows.map((r) => r[4]), ['Kahoot 教師版', AI]);
-  submitTo(S.E, tab, answersOf({ name: '新', email: 'n@gmail.com', role: '行政', detail: '幼兒園', workspace: 'n' + SCHOOL }, AI + ', Wordwall 專業版'), t(1));
+  submitTo(S.E, tab, answersOf({ name: '新', email: 'n@gmail.com', role: '行政', detail: '幼兒園' }, 'Wordwall 專業版'), t(1));
+  // a v3.1 response from 行政 that ticked AI Pro in the old checkbox is still refused
+  submitTo(S.E, tab, { [Q.name]: '舊行政', [Q.email]: 'o@gmail.com', [Q.role]: '行政', [Q.office]: '教務處',
+    [Q.software]: AI, [Q.workspace]: 'o' + SCHOOL }, t(2));
   rows = regRows(S.E);
   assert.deepStrictEqual(rows.slice(2).map((r) => [r[3], r[4], r[5]]),
-    [['行政／幼兒園', 'Wordwall 專業版', '正取'], ['行政／幼兒園', AI, '不符資格'], ['行政／幼兒園', TS, '正取']],
+    [['行政／幼兒園', 'Wordwall 專業版', '正取'], ['行政／幼兒園', TS, '正取'], ['行政／教務處', AI, '不符資格']],
     'order follows 軟體清單, where the upgrade appended TeacherSay at the bottom');
 });
 
@@ -504,15 +517,15 @@ ok('registration: TeacherSay for everyone, ranks, waitlist, AI Pro rules, receip
   send(7, teacher(7, '二年級', { workspace: 't7' + SCHOOL }), AI);
   send(8, { name: '科任8', email: 't8@gmail.com', role: '科任', detail: '自然', workspace: 't8' + SCHOOL }, AI);
   send(9, { name: '科任9', email: 't9@gmail.com', role: '科任', detail: '社會', workspace: 't9' + SCHOOL }, AI);
-  send(10, { name: '幼10', email: 't10@gmail.com', role: '行政', detail: '幼兒園', workspace: 't10' + SCHOOL }, AI + ', Wordwall 專業版');
+  send(10, { name: '幼10', email: 't10@gmail.com', role: '行政', detail: '幼兒園', workspace: 't10' + SCHOOL }, AI + ', Wordwall 專業版'); // AI Pro never asked
   send(11, teacher(1, '一年級', { email: 'T1@gmail.com' }), 'Kahoot 教師版, Padlet 學校版'); // duplicate Kahoot + TeacherSay
   send(12, teacher(12, '三年級'), ''); // TeacherSay only
 
   const rows = regRows(E);
   assert.strictEqual(rows.filter((r) => r[4] === TS).length, 11, 'one TeacherSay row per person');
   assert.ok(rows.filter((r) => r[4] === TS).every((r) => r[5] === '正取'), 'TeacherSay is unlimited');
-  // TeacherSay 11 + Kahoot 6 (the duplicate is not added) + HiTeach 5 + AI Pro 5 + Wordwall 1 + Padlet 1
-  assert.strictEqual(rows.length, 11 + 6 + 5 + 5 + 1 + 1);
+  // TeacherSay 11 + Kahoot 6 (the duplicate is not added) + HiTeach 5 + AI Pro 4 (not 行政) + Wordwall 1 + Padlet 1
+  assert.strictEqual(rows.length, 11 + 6 + 5 + 4 + 1 + 1);
   assert.deepStrictEqual(rowOf(rows, 't5@gmail.com', 'Kahoot 教師版').slice(5, 7), ['正取', 5]);
   assert.deepStrictEqual(rowOf(rows, 't6@gmail.com', 'Kahoot 教師版').slice(5, 7), ['備取', 1]);
   assert.strictEqual(rowOf(rows, 't1@gmail.com', 'HiTeach 專業版')[3], '學年／一年級');
@@ -522,7 +535,8 @@ ok('registration: TeacherSay for everyone, ranks, waitlist, AI Pro rules, receip
   assert.strictEqual(rowOf(rows, 't7@gmail.com', AI)[5], '備取');
   assert.strictEqual(rowOf(rows, 't8@gmail.com', AI)[5], '正取');
   assert.strictEqual(rowOf(rows, 't9@gmail.com', AI)[5], '備取', 'second 科任 waits even with another subject');
-  assert.strictEqual(rowOf(rows, 't10@gmail.com', AI)[5], '不符資格', '幼兒園 is under 行政');
+  assert.strictEqual(rowOf(rows, 't10@gmail.com', AI), undefined, '行政 cannot apply for AI Pro on the form');
+  assert.strictEqual(rowOf(rows, 't10@gmail.com', 'Wordwall 專業版')[11], '', 'no school account recorded for 行政');
   assert.strictEqual(rowOf(rows, 't6@gmail.com', AI)[11], 't6' + SCHOOL);
   assert.strictEqual(rowOf(rows, 't6@gmail.com', AI)[10], '');
   assert.strictEqual(rowOf(rows, 't12@gmail.com', TS)[5], '正取');
@@ -535,7 +549,7 @@ ok('registration: TeacherSay for everyone, ranks, waitlist, AI Pro rules, receip
   assert.deepStrictEqual([receipts[5].to, receipts[5].cc], ['t6@gmail.com', 't6' + SCHOOL]);
   assert.ok(receipts[5].htmlBody.includes('備取（備取第 1 位）'));
   assert.ok(!receipts[5].htmlBody.includes('未填寫學校帳號'));
-  assert.ok(receipts[9].htmlBody.includes('不符申請資格') && receipts[9].cc === 't10' + SCHOOL);
+  assert.ok(!receipts[9].htmlBody.includes(AI) && receipts[9].cc === undefined, '行政 receipt has no AI Pro and no CC');
   assert.ok(receipts[10].htmlBody.includes('您先前已登記過') && receipts[10].htmlBody.includes('<b>Padlet 學校版</b>：正取（第 1 位）'));
   const adminMails = E.mails.filter((m) => m.to === 'lres712@mail.lres.tc.edu.tw');
   assert.strictEqual(adminMails.length, 2);
@@ -716,6 +730,25 @@ ok('upgrade from v3.0: old registrations are archived to a renamed tab, the new 
   N.E.call('setupForm()');
   assert.strictEqual(N.E.createdForms.length, 0);
   assert.strictEqual(N.E.ss.getSheetByName('申請登記'), keep);
+});
+
+ok('admin hands a 行政 seat out by hand: a row marked 已發放 uses a seat, is never mailed or re-issued', () => {
+  const { E, send } = readyEnv();
+  const reg = E.ss.getSheetByName('申請登記');
+  // the admin types a row for an office staff member directly into 申請登記
+  reg.appendRow([t(0), '主任', 'boss@gmail.com', '行政／教務處', AI, '已發放', '', false, '', t(0), '管理者手動分配', 'boss' + SCHOOL]);
+  for (let i = 1; i <= 6; i++) send(i, teacher(i, ['一年級', '二年級', '三年級', '四年級', '五年級', '六年級'][i - 1], { workspace: 't' + i + SCHOOL }), AI);
+  send(7, { name: '科任7', email: 't7@gmail.com', role: '科任', detail: '自然', workspace: 't7' + SCHOOL }, AI);
+  const rows = regRows(E);
+  const ai = rows.filter((r) => r[4] === AI);
+  assert.deepStrictEqual(ai.map((r) => r[5]), ['已發放', '正取', '正取', '正取', '正取', '正取', '正取', '備取'],
+    'the manual seat counts: 7 seats = 1 manual + 6 grades, so the 科任 applicant waits');
+  const before = E.mails.length;
+  E.call('menuApproveAllAccepted()');
+  E.call('menuIssueApproved()');
+  const issuedTo = E.mails.slice(before).filter((m) => m.subject.includes('授權核准')).map((m) => m.to);
+  assert.ok(issuedTo.indexOf('boss@gmail.com') < 0, 'no mail for the hand-entered row');
+  assert.strictEqual(regRows(E).find((r) => r[2] === 'boss@gmail.com')[10], '管理者手動分配');
 });
 
 ok('quota edited in 軟體清單 takes effect on the next submission', () => {

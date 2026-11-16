@@ -13,15 +13,15 @@
  * 要重新建立一份表單時，先執行 resetEnrollmentForm() 解除綁定。
  *
  * 表單結構與跳題：
- *   區段 1 基本資料：姓名、開通授權的 Google 帳號、職務
- *     ├ 學年 → 區段 2【學年】任教學年 (一～六年級)
- *     ├ 科任 → 區段 3【科任】任教科目 (簡答)
- *     └ 行政 → 區段 4【行政】所屬處室
- *   區段 2、3、4 填完都到 區段 5【TeacherSay 專業版】：必填核取方塊 (預填連結會預先勾選)
+ *   區段 1 基本資料：姓名、開通授權的 Google 帳號
+ *   區段 2【TeacherSay 專業版】：必填核取方塊 (預填連結會預先勾選)
  *     未勾選就無法前往下一頁，也就看不到其他軟體選項
- *   區段 6 申請軟體授權：其他軟體 (複選，選填)
- *     是否申請 Google AI Pro 教育版？ 是 → 區段 7；否 → 送出
- *   區段 7【Google AI Pro 教育版】：學校帳號 (必填，限 @SCHOOL_DOMAIN)
+ *   區段 3 申請軟體授權：其他軟體 (複選，選填)
+ *   區段 4【職務】：學年 → 區段 5；科任 → 區段 6；行政 → 區段 7
+ *   區段 5【學年】任教學年、區段 6【科任】任教科目 → 填完都到 區段 8
+ *   區段 7【行政】所屬處室 → 填完直接送出 (行政不提供 Google AI Pro，由管理者另行分配)
+ *   區段 8【Google AI Pro 教育版】是否申請？ 是 → 區段 9；否 → 送出
+ *   區段 9【Google AI Pro 學校帳號】：學校帳號 (必填，限 @SCHOOL_DOMAIN)
  */
 
 const FORM_TITLE = '教學軟體授權申請表';
@@ -31,14 +31,19 @@ const FORM_DESCRIPTION =
   TEACHERSAY_NOTICE + '\n' +
   '系統依登記先後排序，名額內為正取，額滿後登記為備取。\n' +
   '登記不代表已取得授權：資訊組審核後，會寄信到您填寫的 Google 帳號，通知授權序號或開通方式。\n' +
-  'Google AI Pro 教育版限' + LIMIT_PER_GROUP_TEXT + '可申請，並須填寫學校帳號（@' + SCHOOL_DOMAIN + '）。';
+  'Google AI Pro 教育版限' + LIMIT_PER_GROUP_TEXT + '可申請，並須填寫學校帳號（@' + SCHOOL_DOMAIN + '）；' +
+  '行政人員的 Google AI Pro 由資訊組另行分配。';
 
 // 區段標題 (setupForm 以標題辨識既有表單上的區段)
-const PAGE_SUBJECT = '【科任】';
-const PAGE_OFFICE = '【行政】';
 const PAGE_TEACHERSAY = '【TeacherSay 專業版】';
 const PAGE_SOFTWARE = '申請軟體授權';
+const PAGE_ROLE = '【職務】';
+const PAGE_GRADE = '【學年】';
+const PAGE_SUBJECT = '【科任】';
+const PAGE_OFFICE = '【行政】';
 const PAGE_AI_PRO = '【Google AI Pro 教育版】';
+const PAGE_WORKSPACE = '【Google AI Pro 學校帳號】';
+const OFFICE_AI_NOTICE = '行政人員的 Google AI Pro 教育版授權由資訊組另行分配，本表單不提供申請。';
 
 // =====================================================================
 // 1. 初始化分頁
@@ -196,55 +201,47 @@ function setupForm() {
 }
 
 /**
- * 建立區段 1～4 與職務跳題。題目順序即回應分頁的欄位順序。
- * TeacherSay、申請軟體授權、Google AI Pro 三個區段與區段間的跳轉由 syncEnrollmentForm_() 建立。
+ * 建立基本資料、職務與學年／科任／行政三個區段的題目。題目順序即回應分頁的欄位順序。
+ * 區段的排列、TeacherSay、申請軟體授權、Google AI Pro 與所有跳轉由 syncEnrollmentForm_() 處理。
  */
 function buildEnrollmentForm_(form) {
   const emailValidation = FormApp.createTextValidation()
     .setHelpText('請輸入有效的 Email 地址').requireTextIsEmail().build();
 
-  // ---------- 區段 1：基本資料 ----------
   form.addTextItem().setTitle(Q_NAME).setRequired(true);
   form.addTextItem().setTitle(Q_EMAIL)
     .setHelpText('多數軟體以 Google 帳號單一登入，請填寫您實際用來登入軟體的 Google 帳號。授權通知也會寄到這個信箱。')
     .setValidation(emailValidation)
     .setRequired(true);
-  const roleItem = form.addMultipleChoiceItem().setTitle(Q_ROLE).setRequired(true);
-
-  // ---------- 區段 2：學年 ----------
-  const pageGrade = form.addPageBreakItem().setTitle('【學年】');
+  form.addMultipleChoiceItem().setTitle(Q_ROLE).setChoiceValues([ROLE.GRADE, ROLE.SUBJECT, ROLE.OFFICE]).setRequired(true);
+  form.addPageBreakItem().setTitle(PAGE_GRADE);
   form.addMultipleChoiceItem().setTitle(Q_GRADE).setChoiceValues(GRADE_CHOICES).setRequired(true);
-
-  // ---------- 區段 3：科任 ----------
-  const pageSubject = form.addPageBreakItem().setTitle(PAGE_SUBJECT);
+  form.addPageBreakItem().setTitle(PAGE_SUBJECT);
   form.addTextItem().setTitle(Q_SUBJECT).setHelpText('例：自然、社會、英語').setRequired(true);
-
-  // ---------- 區段 4：行政 ----------
-  const pageOffice = form.addPageBreakItem().setTitle(PAGE_OFFICE);
+  form.addPageBreakItem().setTitle(PAGE_OFFICE);
   form.addMultipleChoiceItem().setTitle(Q_OFFICE).setChoiceValues(OFFICE_CHOICES).setRequired(true);
-
-  // ---------- 職務跳題 ----------
-  roleItem.setChoices([
-    roleItem.createChoice(ROLE.GRADE, pageGrade),
-    roleItem.createChoice(ROLE.SUBJECT, pageSubject),
-    roleItem.createChoice(ROLE.OFFICE, pageOffice)
-  ]);
 }
 
 /**
- * 讓表單的說明、行政處室選項，以及 TeacherSay、申請軟體授權、Google AI Pro 三個區段符合目前版本。
- * 新表單與 v3.1 建立的表單都適用；可重複執行。缺少的題目會新增並移到正確位置，
+ * 讓表單的說明、區段順序、題目與跳轉符合目前版本 (見檔案開頭的表單結構)。
+ * 新表單與 v3.1 建立的表單都適用；可重複執行。缺少的題目或區段會新增，所有已知題目都移到固定位置；
  * 既有題目以標題辨識、就地修改，所以回應分頁的既有欄位與資料不受影響。
  * @returns {string[]} 變更說明
  */
 function syncEnrollmentForm_(form, softwareList) {
   const T = FormApp.ItemType;
+  const NAV = FormApp.PageNavigationType;
   const changes = [];
   const find = function (title, type, label) {
     const item = findItemByTitle_(form, title);
     if (item && item.getType() !== type) {
       throw new Error('「' + title + '」題型不符 (' + label + ')');
     }
+    return item;
+  };
+  const need = function (title, type, label) {
+    const item = find(title, type, label);
+    if (!item) throw new Error('找不到「' + title + '」');
     return item;
   };
   // 回傳一律是 form.getItems() 的通用 Item (新增的題目也重新取一次)，之後統一用 asXxxItem() 轉型
@@ -255,64 +252,73 @@ function syncEnrollmentForm_(form, softwareList) {
     }
     return find(title, type, label);
   };
+  const newPage = function () { return form.addPageBreakItem(); };
 
   form.setDescription(FORM_DESCRIPTION);
 
-  // 行政處室選項 (加入幼兒園)
-  const office = find(Q_OFFICE, T.MULTIPLE_CHOICE, '單選');
-  if (!office) throw new Error('找不到「' + Q_OFFICE + '」');
-  const officeItem = office.asMultipleChoiceItem();
-  if (officeItem.getChoices().length !== OFFICE_CHOICES.length) changes.push('・「' + Q_OFFICE + '」選項更新為：' + OFFICE_CHOICES.join('、'));
-  officeItem.setChoiceValues(OFFICE_CHOICES);
-
-  // 區段 5【TeacherSay 專業版】：接在行政區段之後，必填、只有一個選項。
-  // 必填題未勾選就不能按「下一頁」，所以沒勾選 TeacherSay 就看不到其他軟體選項。
-  const pageTeacherSay = ensure(PAGE_TEACHERSAY, T.PAGE_BREAK, '區段', function () { return form.addPageBreakItem(); });
-  placeAfter_(form, pageTeacherSay, office);
-  pageTeacherSay.asPageBreakItem().setHelpText(TEACHERSAY_NOTICE);
+  // ---------- 取得或建立所有題目與區段 ----------
+  const email = need(Q_EMAIL, T.TEXT, '簡答');
+  const pageTeacherSay = ensure(PAGE_TEACHERSAY, T.PAGE_BREAK, '區段', newPage);
   const teacherSay = ensure(Q_TEACHERSAY, T.CHECKBOX, '核取方塊', function () { return form.addCheckboxItem(); });
-  placeAfter_(form, teacherSay, pageTeacherSay);
+  const pageSoftware = ensure(PAGE_SOFTWARE, T.PAGE_BREAK, '區段', newPage);
+  const software = ensure(Q_SOFTWARE, T.CHECKBOX, '核取方塊', function () { return form.addCheckboxItem(); });
+  const pageRole = ensure(PAGE_ROLE, T.PAGE_BREAK, '區段', newPage);
+  const role = need(Q_ROLE, T.MULTIPLE_CHOICE, '單選');
+  const pageGrade = need(PAGE_GRADE, T.PAGE_BREAK, '區段');
+  const grade = need(Q_GRADE, T.MULTIPLE_CHOICE, '單選');
+  const pageSubject = need(PAGE_SUBJECT, T.PAGE_BREAK, '區段');
+  const subject = need(Q_SUBJECT, T.TEXT, '簡答');
+  const pageOffice = need(PAGE_OFFICE, T.PAGE_BREAK, '區段');
+  const office = need(Q_OFFICE, T.MULTIPLE_CHOICE, '單選');
+  const pageAi = ensure(PAGE_AI_PRO, T.PAGE_BREAK, '區段', newPage);
+  const aiPro = ensure(Q_AI_PRO, T.MULTIPLE_CHOICE, '單選', function () { return form.addMultipleChoiceItem(); });
+  const pageWorkspace = ensure(PAGE_WORKSPACE, T.PAGE_BREAK, '區段', newPage);
+  const workspace = ensure(Q_WORKSPACE, T.TEXT, '簡答', function () { return form.addTextItem(); });
+
+  // ---------- 排列順序：從「Google 帳號」之後依序排好 ----------
+  [pageTeacherSay, teacherSay, pageSoftware, software, pageRole, role, pageGrade, grade, pageSubject, subject,
+    pageOffice, office, pageAi, aiPro, pageWorkspace, workspace].reduce(function (anchor, item) {
+    placeAfter_(form, item, anchor);
+    return item;
+  }, email);
+
+  // ---------- 區段 2【TeacherSay】：必填、只有一個選項；沒勾就不能前往下一頁 ----------
+  pageTeacherSay.asPageBreakItem().setHelpText(TEACHERSAY_NOTICE);
   teacherSay.asCheckboxItem()
     .setChoiceValues([REQUIRED_SOFTWARE])
     .setHelpText(TEACHERSAY_NOTICE + '\n請勾選後再按「下一頁」，未勾選無法選擇其他軟體，也無法送出表單。')
     .setRequired(true);
 
-  // 區段 6 申請軟體授權：其他軟體 (TeacherSay 與 Google AI Pro 不在這題)
-  const pageSoftware = ensure(PAGE_SOFTWARE, T.PAGE_BREAK, '區段', function () { return form.addPageBreakItem(); });
-  placeAfter_(form, pageSoftware, teacherSay);
-  const software = ensure(Q_SOFTWARE, T.CHECKBOX, '核取方塊', function () { return form.addCheckboxItem(); });
-  placeAfter_(form, software, pageSoftware);
+  // ---------- 區段 3 申請軟體授權：TeacherSay 與 Google AI Pro 不在這題 ----------
   const otherNames = softwareList
     .map(function (sw) { return sw.name; })
     .filter(function (name) { return name !== REQUIRED_SOFTWARE && name !== WORKSPACE_ACCOUNT_SOFTWARE; });
   if (otherNames.length > 0) software.asCheckboxItem().setChoiceValues(otherNames);
   software.asCheckboxItem().setRequired(false);
 
-  // 學年、科任區段填完都前往 TeacherSay 區段 (行政區段之後依序就是 TeacherSay 區段)。
-  // 分頁符號的 setGoToPage：填完「前一個區段」後要前往的區段。
-  [PAGE_SUBJECT, PAGE_OFFICE].forEach(function (title) {
-    const page = find(title, T.PAGE_BREAK, '區段');
-    if (!page) throw new Error('找不到「' + title + '」區段');
-    page.asPageBreakItem().setGoToPage(pageTeacherSay.asPageBreakItem());
-  });
+  // ---------- 區段 4【職務】與 5～7 ----------
+  const roleItem = role.asMultipleChoiceItem();
+  roleItem.setChoices([
+    roleItem.createChoice(ROLE.GRADE, pageGrade.asPageBreakItem()),
+    roleItem.createChoice(ROLE.SUBJECT, pageSubject.asPageBreakItem()),
+    roleItem.createChoice(ROLE.OFFICE, pageOffice.asPageBreakItem())
+  ]).setRequired(true);
+  const officeItem = office.asMultipleChoiceItem();
+  if (officeItem.getChoices().length !== OFFICE_CHOICES.length) changes.push('・「' + Q_OFFICE + '」選項更新為：' + OFFICE_CHOICES.join('、'));
+  officeItem.setChoiceValues(OFFICE_CHOICES);
+  pageOffice.asPageBreakItem().setHelpText(OFFICE_AI_NOTICE);
 
-  // Google AI Pro：是 → 學校帳號頁；否 → 送出
-  const aiPro = ensure(Q_AI_PRO, T.MULTIPLE_CHOICE, '單選', function () { return form.addMultipleChoiceItem(); });
-  placeAfter_(form, aiPro, software);
-  const pageAi = ensure(PAGE_AI_PRO, T.PAGE_BREAK, '區段', function () { return form.addPageBreakItem(); });
-  placeAfter_(form, pageAi, aiPro);
+  // ---------- 區段 8【Google AI Pro】：是 → 學校帳號；否 → 送出 ----------
   const aiItem = aiPro.asMultipleChoiceItem();
   aiItem.setChoices([
-    aiItem.createChoice(AI_YES, pageAi.asPageBreakItem()),
-    aiItem.createChoice(AI_NO, FormApp.PageNavigationType.SUBMIT)
+    aiItem.createChoice(AI_YES, pageWorkspace.asPageBreakItem()),
+    aiItem.createChoice(AI_NO, NAV.SUBMIT)
   ]);
-  aiItem.setHelpText('限' + LIMIT_PER_GROUP_TEXT + '（行政、幼兒園不符申請資格）。選「' + AI_YES + '」須在下一頁填寫學校帳號才能送出。')
+  aiItem.setHelpText('限' + LIMIT_PER_GROUP_TEXT + '，依登記先後排序。選「' + AI_YES + '」須在下一頁填寫學校帳號才能送出。')
     .setRequired(true);
-  pageAi.asPageBreakItem().setHelpText('Google AI Pro 教育版會開通在學校帳號。');
 
-  // 學校帳號：只有選「是」才會看到，必填且限學校網域
-  const workspace = ensure(Q_WORKSPACE, T.TEXT, '簡答', function () { return form.addTextItem(); });
-  placeAfter_(form, workspace, pageAi);
+  // ---------- 區段 9 學校帳號：必填且限學校網域 ----------
+  pageWorkspace.asPageBreakItem().setHelpText('Google AI Pro 教育版會開通在學校帳號。');
   workspace.asTextItem()
     .setHelpText('請填寫學校帳號（@' + SCHOOL_DOMAIN + '）。授權會開通在這個帳號，通知信也會副本到這裡。')
     .setValidation(FormApp.createTextValidation()
@@ -320,6 +326,16 @@ function syncEnrollmentForm_(form, softwareList) {
       .requireTextMatchesPattern(schoolAccountPattern_())
       .build())
     .setRequired(true);
+
+  // ---------- 區段之間的跳轉 ----------
+  // 分頁符號的 setGoToPage：依序填完「這個分頁符號之前的區段」後要前往哪裡。
+  // 區段裡有依答案跳轉的單選題時 (職務、Google AI Pro)，以單選題為準。
+  pageTeacherSay.asPageBreakItem().setGoToPage(NAV.CONTINUE); // 基本資料 → TeacherSay
+  pageSoftware.asPageBreakItem().setGoToPage(NAV.CONTINUE);   // TeacherSay → 申請軟體授權
+  pageRole.asPageBreakItem().setGoToPage(NAV.CONTINUE);       // 申請軟體授權 → 職務
+  pageSubject.asPageBreakItem().setGoToPage(pageAi.asPageBreakItem());      // 學年填完 → Google AI Pro
+  pageOffice.asPageBreakItem().setGoToPage(pageAi.asPageBreakItem());       // 科任填完 → Google AI Pro
+  pageAi.asPageBreakItem().setGoToPage(NAV.SUBMIT);                         // 行政填完 → 送出 (看不到 Google AI Pro)
 
   return changes;
 }
