@@ -473,7 +473,7 @@ ok('upgrade a v3.1 form in place: same form and tab, new questions slotted in, o
   submitTo(S.E, tab, answersOf({ name: '新', email: 'n@gmail.com', role: '行政', detail: '幼兒園', workspace: 'n' + SCHOOL }, AI + ', Wordwall 專業版'), t(1));
   rows = regRows(S.E);
   assert.deepStrictEqual(rows.slice(2).map((r) => [r[3], r[4], r[5]]),
-    [['行政／幼兒園', 'Wordwall 專業版', '正取'], ['行政／幼兒園', AI, '正取'], ['行政／幼兒園', TS, '正取']],
+    [['行政／幼兒園', 'Wordwall 專業版', '正取'], ['行政／幼兒園', AI, '不符資格'], ['行政／幼兒園', TS, '正取']],
     'order follows 軟體清單, where the upgrade appended TeacherSay at the bottom');
 });
 
@@ -507,13 +507,12 @@ ok('registration: TeacherSay for everyone, ranks, waitlist, AI Pro rules, receip
   send(10, { name: '幼10', email: 't10@gmail.com', role: '行政', detail: '幼兒園', workspace: 't10' + SCHOOL }, AI + ', Wordwall 專業版');
   send(11, teacher(1, '一年級', { email: 'T1@gmail.com' }), 'Kahoot 教師版, Padlet 學校版'); // duplicate Kahoot + TeacherSay
   send(12, teacher(12, '三年級'), ''); // TeacherSay only
-  send(13, { name: '教務13', email: 't13@gmail.com', role: '行政', detail: '教務處', workspace: 't13' + SCHOOL }, AI);
 
   const rows = regRows(E);
-  assert.strictEqual(rows.filter((r) => r[4] === TS).length, 12, 'one TeacherSay row per person');
+  assert.strictEqual(rows.filter((r) => r[4] === TS).length, 11, 'one TeacherSay row per person');
   assert.ok(rows.filter((r) => r[4] === TS).every((r) => r[5] === '正取'), 'TeacherSay is unlimited');
-  // TeacherSay 12 + Kahoot 6 (the duplicate is not added) + HiTeach 5 + AI Pro 6 + Wordwall 1 + Padlet 1
-  assert.strictEqual(rows.length, 12 + 6 + 5 + 6 + 1 + 1);
+  // TeacherSay 11 + Kahoot 6 (the duplicate is not added) + HiTeach 5 + AI Pro 5 + Wordwall 1 + Padlet 1
+  assert.strictEqual(rows.length, 11 + 6 + 5 + 5 + 1 + 1);
   assert.deepStrictEqual(rowOf(rows, 't5@gmail.com', 'Kahoot 教師版').slice(5, 7), ['正取', 5]);
   assert.deepStrictEqual(rowOf(rows, 't6@gmail.com', 'Kahoot 教師版').slice(5, 7), ['備取', 1]);
   assert.strictEqual(rowOf(rows, 't1@gmail.com', 'HiTeach 專業版')[3], '學年／一年級');
@@ -523,21 +522,20 @@ ok('registration: TeacherSay for everyone, ranks, waitlist, AI Pro rules, receip
   assert.strictEqual(rowOf(rows, 't7@gmail.com', AI)[5], '備取');
   assert.strictEqual(rowOf(rows, 't8@gmail.com', AI)[5], '正取');
   assert.strictEqual(rowOf(rows, 't9@gmail.com', AI)[5], '備取', 'second 科任 waits even with another subject');
-  assert.strictEqual(rowOf(rows, 't10@gmail.com', AI)[5], '正取', '行政 (幼兒園) may apply');
-  assert.deepStrictEqual(rowOf(rows, 't13@gmail.com', AI).slice(5, 7), ['備取', 3], 'one seat for all of 行政, whatever the office');
+  assert.strictEqual(rowOf(rows, 't10@gmail.com', AI)[5], '不符資格', '幼兒園 is under 行政');
   assert.strictEqual(rowOf(rows, 't6@gmail.com', AI)[11], 't6' + SCHOOL);
   assert.strictEqual(rowOf(rows, 't6@gmail.com', AI)[10], '');
   assert.strictEqual(rowOf(rows, 't12@gmail.com', TS)[5], '正取');
   assert.ok(rows.every((r) => r[7] === false && r[8] === ''), 'no approval, no serial at registration');
 
   const receipts = E.mails.filter((m) => m.subject === '【已登記】教學軟體授權申請');
-  assert.strictEqual(receipts.length, 13);
+  assert.strictEqual(receipts.length, 12);
   assert.ok(receipts.every((m) => m.htmlBody.includes('<b>TeacherSay 專業版</b>')));
   assert.deepStrictEqual([receipts[0].to, receipts[0].cc], ['t1@gmail.com', undefined]);
   assert.deepStrictEqual([receipts[5].to, receipts[5].cc], ['t6@gmail.com', 't6' + SCHOOL]);
   assert.ok(receipts[5].htmlBody.includes('備取（備取第 1 位）'));
   assert.ok(!receipts[5].htmlBody.includes('未填寫學校帳號'));
-  assert.ok(receipts[9].htmlBody.includes('<b>Google AI Pro 教育版</b>：正取') && receipts[9].cc === 't10' + SCHOOL);
+  assert.ok(receipts[9].htmlBody.includes('不符申請資格') && receipts[9].cc === 't10' + SCHOOL);
   assert.ok(receipts[10].htmlBody.includes('您先前已登記過') && receipts[10].htmlBody.includes('<b>Padlet 學校版</b>：正取（第 1 位）'));
   const adminMails = E.mails.filter((m) => m.to === 'lres712@mail.lres.tc.edu.tw');
   assert.strictEqual(adminMails.length, 2);
@@ -546,10 +544,10 @@ ok('registration: TeacherSay for everyone, ranks, waitlist, AI Pro rules, receip
   assert.ok(help.includes('・Kahoot 教師版：已額滿（備取 1 人）'), help);
   assert.ok(help.includes('・HiTeach 專業版：剩餘 10／15'), help);
   assert.ok(help.includes('・TeacherSay 專業版：不限名額（每位申請者必選）'), help);
-  assert.ok(help.includes('・Google AI Pro 教育版：剩餘 4／7｜限各學年、科任、行政各一位，尚可申請：一年級、三年級、四年級、五年級、六年級'), help);
+  assert.ok(help.includes('・Google AI Pro 教育版：剩餘 5／7｜限各學年、科任各一位，尚可申請：一年級、三年級、四年級、五年級、六年級'), help);
   const stats = E.ss.getSheetByName('申請統計').getRange(1, 1, 8, 10).getValues();
   assert.deepStrictEqual(stats.find((r) => r[0] === 'Kahoot 教師版').slice(1, 8), [5, 6, 5, 1, 0, 0, 0]);
-  assert.deepStrictEqual(stats.find((r) => r[0] === TS).slice(1, 8), ['不限', 12, 12, 0, 0, 0, '不限']);
+  assert.deepStrictEqual(stats.find((r) => r[0] === TS).slice(1, 8), ['不限', 11, 11, 0, 0, 0, '不限']);
 });
 
 // ============ 6. approval + issuing ============

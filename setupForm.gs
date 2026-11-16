@@ -306,8 +306,7 @@ function syncEnrollmentForm_(form, softwareList) {
     aiItem.createChoice(AI_YES, pageAi.asPageBreakItem()),
     aiItem.createChoice(AI_NO, FormApp.PageNavigationType.SUBMIT)
   ]);
-  aiItem.setHelpText('選填。限' + LIMIT_PER_GROUP_TEXT + '（科任不分科目、行政含幼兒園各算一組），依登記先後排序。' +
-    '選「' + AI_YES + '」須在下一頁填寫學校帳號才能送出。')
+  aiItem.setHelpText('限' + LIMIT_PER_GROUP_TEXT + '（行政、幼兒園不符申請資格）。選「' + AI_YES + '」須在下一頁填寫學校帳號才能送出。')
     .setRequired(true);
   pageAi.asPageBreakItem().setHelpText('Google AI Pro 教育版會開通在學校帳號。');
 
