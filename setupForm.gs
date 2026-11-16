@@ -181,7 +181,8 @@ function setupForm() {
     message = '已建立新的申請表單，回應會寫入' +
       (responseSheet ? '新分頁「' + responseSheet.getName() + '」。' : '本試算表的新分頁。') +
       '\n舊表單與舊回應分頁沒有變動，它們的回應不會被登記；不再使用時請自行關閉舊表單。' +
-      (archivedName ? '\n原有的登記資料已封存為分頁「' + archivedName + '」。' : '');
+      (archivedName ? '\n原有的登記資料已封存為分頁「' + archivedName + '」。' : '') +
+      '\n' + openToAnyoneWithLink_(form);
   }
 
   const regSheet = getRegSheet_(ss);
@@ -338,6 +339,29 @@ function syncEnrollmentForm_(form, softwareList) {
   pageAi.asPageBreakItem().setGoToPage(NAV.SUBMIT);                         // 行政填完 → 送出 (看不到 Google AI Pro)
 
   return changes;
+}
+
+/**
+ * 新表單：發布並把作答者設為「知道連結的任何人」(不必登入就能填寫)。
+ * 學校網域建立的表單預設只開放給網域內的使用者，所以要另外加上 Drive 的「發布檢視」權限
+ * (type: anyone, view: published)，需要已啟用的 Drive 進階服務 (v3)。
+ * 失敗時 (例如管理員禁止對外共用) 不中斷建立流程，只回傳手動設定的說明。
+ * 只在建立新表單時執行；更新既有表單時不會變更作答者權限。
+ * @returns {string} 結果說明
+ */
+function openToAnyoneWithLink_(form) {
+  try {
+    if (typeof form.supportsAdvancedResponderPermissions === 'function' && form.supportsAdvancedResponderPermissions() &&
+      !form.isPublished()) {
+      form.setPublished(true);
+    }
+    Drive.Permissions.create({ type: 'anyone', role: 'reader', view: 'published' }, form.getId());
+    return '作答者權限：知道連結的任何人（不必登入即可填寫）。';
+  } catch (error) {
+    Logger.log('設定作答者權限失敗：' + error);
+    return '【注意】無法自動開放作答者權限（' + (error.message || error) + '）。' +
+      '請在表單編輯器按「已發布」→ 作答者「管理」，把「作答者檢視權限」改為「知道連結的任何人」。';
+  }
 }
 
 /** 把 item 移到 anchor 的正後方。 */

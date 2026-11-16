@@ -110,8 +110,11 @@ class Item {
   }
 }
 class Form {
-  constructor(title, id) { this.title = title; this.items = []; this.description = ''; this.id = id; this.url = 'https://forms/' + id; }
+  constructor(title, id) { this.title = title; this.items = []; this.description = ''; this.id = id; this.url = 'https://forms/' + id; this.published = false; }
   getId() { return this.id; }
+  supportsAdvancedResponderPermissions() { return true; }
+  isPublished() { return this.published; }
+  setPublished(b) { this.published = b; return this; }
   getItems() { return this.items.map((it) => it.generic()); }
   add(type) { const it = new Item(this, type); this.items.push(it); return it; }
   addTextItem() { return this.add(ItemType.TEXT); }
@@ -146,6 +149,7 @@ function makeEnv(opts) {
   const createdForms = [];
   const props = {};
   const triggers = [];
+  const drivePermissions = [];
   // what Google does when a form is linked to a spreadsheet: a new response tab with the question titles as headers
   const linkForm = (form) => {
     const n = ss.sheets.filter((s) => s.formUrl).length + 1;
@@ -203,6 +207,12 @@ function makeEnv(opts) {
       getRemainingDailyQuota: () => (opts.mailQuota === undefined ? 100 : opts.mailQuota),
     },
     GmailApp: { sendEmail: () => {} },
+    Drive: { Permissions: { create: (resource, fileId) => {
+      if (opts.drivePolicyBlocks) throw new Error('The user does not have sufficient permissions for this file.');
+      assert.ok(Object.values(forms).some((f) => f.id === fileId), 'permission on an unknown file ' + fileId);
+      drivePermissions.push({ resource: Object.assign({}, resource), fileId });
+      return { id: 'perm-' + drivePermissions.length };
+    } } },
     HtmlService: {},
     LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
     PropertiesService: { getScriptProperties: () => ({
@@ -219,7 +229,7 @@ function makeEnv(opts) {
   const ctx = vm.createContext(env);
   files.forEach((f) => vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f }));
   const call = (expr, vars) => { Object.assign(env, vars || {}); return vm.runInContext(expr, ctx); };
-  return { ss, mails, alerts, forms, createdForms, props, triggers, env, call, newForm, linkForm };
+  return { ss, mails, alerts, forms, createdForms, props, triggers, env, call, newForm, linkForm, drivePermissions };
 }
 
 // submit a form response: append to that form's response tab, then fire the spreadsheet trigger
@@ -389,16 +399,21 @@ ok('setupForm creates a NEW form: TeacherSay gate, software, role branches, AI P
   assert.ok(E.alerts[E.alerts.length - 1].includes(prefill));
 
   assert.strictEqual(form.destination, 'ss-id');
+  assert.strictEqual(form.published, true, 'new form is published');
+  assert.deepStrictEqual(E.drivePermissions, [{ resource: { type: 'anyone', role: 'reader', view: 'published' }, fileId: form.id }],
+    'anyone with the link may respond');
+  assert.ok(E.alerts.some((a) => a.includes('作答者權限：知道連結的任何人')));
   assert.strictEqual(sheet.name, '表單回應 2', 'responses go to a new tab of the same spreadsheet');
   assert.strictEqual(E.props.ENROLL_FORM_ID, form.id);
   assert.strictEqual(E.props.ENROLL_RESPONSE_SHEET_ID, String(sheet.id));
   assert.strictEqual(lic.get(1, 4), '軟體');
   assert.strictEqual(E.triggers.length, 1, 'trigger must not be duplicated');
 
-  // running it again updates the same form instead of creating another
+  // running it again updates the same form instead of creating another, and leaves responder access alone
   E.ss.getSheetByName('軟體清單').appendRow(['Canva 教育版', 3, '帳號', '']);
   E.call('setupForm()');
   assert.strictEqual(E.createdForms.length, 1);
+  assert.strictEqual(E.drivePermissions.length, 1, 'updating does not touch responder access');
   assert.deepStrictEqual(titlesOf(form), FORM_LAYOUT, 'no duplicated questions');
   assert.strictEqual(sw.choices[sw.choices.length - 1], 'Canva 教育版');
   assert.ok(sw.help.includes('・Canva 教育版：剩餘 3／3'));
@@ -461,6 +476,7 @@ ok('upgrade a v3.1 form in place: same form and tab, new questions slotted in, o
   S.E.call('setupForm()');
 
   assert.strictEqual(S.E.createdForms.length, 0, 'no new form');
+  assert.strictEqual(S.E.drivePermissions.length, 0, 'an existing form keeps its responder access');
   assert.strictEqual(S.E.props.ENROLL_RESPONSE_SHEET_ID, String(tab.id), 'same response tab');
   assert.deepStrictEqual(titlesOf(f), FORM_LAYOUT);
   const aiPage = f.items.find((i) => i.title === '【Google AI Pro 教育版】');
@@ -749,6 +765,20 @@ ok('admin hands a 行政 seat out by hand: a row marked 已發放 uses a seat, i
   const issuedTo = E.mails.slice(before).filter((m) => m.subject.includes('授權核准')).map((m) => m.to);
   assert.ok(issuedTo.indexOf('boss@gmail.com') < 0, 'no mail for the hand-entered row');
   assert.strictEqual(regRows(E).find((r) => r[2] === 'boss@gmail.com')[10], '管理者手動分配');
+});
+
+ok('when the domain blocks sharing outside, the form is still created and the admin is told what to set by hand', () => {
+  const S = schoolEnv({ drivePolicyBlocks: true });
+  S.E.call('setupSheets()');
+  S.E.call('setupForm()');
+  const form = S.E.createdForms[0];
+  assert.ok(form && S.E.props.ENROLL_FORM_ID === form.id, 'form created and bound');
+  const msg = S.E.alerts.find((a) => a.includes('已建立新的申請表單'));
+  assert.ok(msg.includes('【注意】無法自動開放作答者權限') && msg.includes('知道連結的任何人'), msg);
+  assert.ok(msg.includes('已預先勾選'), 'the rest of the setup message still shows');
+  const sheet = S.E.ss.sheets.find((s) => s.formUrl === form.url);
+  submitTo(S.E, sheet, answersOf(teacher(1, '一年級'), 'Kahoot 教師版'), t(1));
+  assert.strictEqual(regRows(S.E).length, 2, 'registration works regardless');
 });
 
 ok('quota edited in 軟體清單 takes effect on the next submission', () => {
