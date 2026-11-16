@@ -1,8 +1,8 @@
 /**
- * @OnlyCurrentDoc
+ * Wordwall 授權帳號確認網頁 (doGet / findAccount / updateStatus)
  *
- * The above comment directs App Script to limit the scope of file
- * access for this script to only the current document.
+ * 注意：原本的 OnlyCurrentDoc 註記已移除。該註記會套用到整個專案，
+ * 使 setupForm.gs 無法開啟連結的 Google 表單 (更新題目與剩餘名額)。
  */
 
 // 試算表工作表的名稱

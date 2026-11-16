@@ -1,0 +1,5 @@
+# clasp push 只上傳 Apps Script 原始碼；test/ 內的 Node 測試與說明文件不上傳
+**/**
+!appsscript.json
+!*.gs
+!*.html
