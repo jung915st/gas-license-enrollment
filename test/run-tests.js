@@ -63,6 +63,7 @@ class Sheet {
   getFormUrl() { return this.formUrl; }
   appendRow(row) { const n = this.getLastRow() + 1; row.forEach((v, j) => this.set(n, j + 1, v)); }
   getName() { return this.name; }
+  setName(n) { this.name = n; return this; }
 }
 class Spreadsheet {
   constructor() { this.sheets = []; }
@@ -511,6 +512,39 @@ ok('manual run / no selection / bad account / no UI / reset are all safe', () =>
   E.call('resetEnrollmentForm()');
   send(3, teacher(3, '一年級'), 'Padlet 學校版');
   assert.strictEqual(regRows(E).length, 1, 'after reset nothing registers until a form is bound again');
+});
+
+ok('upgrade from v3.0: old registrations are archived to a renamed tab, the new tab starts empty', () => {
+  const S = schoolEnv();
+  // what v3.0 left behind: an 11-column 申請登記 with rows that came from the old form
+  const old = S.E.ss.insertSheet('申請登記');
+  old.getRange(1, 1, 1, 11).setValues([['登記時間', '姓名', 'Email', '身分', '軟體', '狀態', '順位', '核准', '序號', '發放時間', '備註']]);
+  old.appendRow([t(0), '測試', 'test@x.tw', '一年級', 'Kahoot 教師版', '正取', 1, false, '', '', '']);
+  old.appendRow([t(0), '測試', 'test@x.tw', '一年級', 'Google AI Pro 教育版', '正取', 1, false, '', '', '']);
+  S.E.call('setupSheets()');
+  S.E.call('setupForm()');
+  assert.ok(S.E.alerts.some((a) => a.includes('已有 2 筆來自舊表單的登記')), 'asks before archiving');
+  const archived = S.E.ss.sheets.find((s) => s.name.startsWith('申請登記_舊_'));
+  assert.ok(archived && archived.getLastRow() === 3, 'old rows kept in the renamed tab');
+  assert.strictEqual(archived, old);
+  const fresh = S.E.ss.getSheetByName('申請登記');
+  assert.notStrictEqual(fresh, old);
+  assert.strictEqual(fresh.getLastRow(), 1);
+  assert.strictEqual(fresh.get(1, 12), '學校帳號');
+  const form = S.E.createdForms[0];
+  const sheet = S.E.ss.sheets.find((s) => s.formUrl === form.url);
+  assert.ok(form.items.find((i) => i.title === Q.software).help.includes('・Kahoot 教師版：剩餘 5／5'), 'archived rows no longer use seats');
+  submitTo(S.E, sheet, answersOf(teacher(1, '一年級', { workspace: 't1' + SCHOOL }), 'Kahoot 教師版, Google AI Pro 教育版'), t(1));
+  assert.deepStrictEqual(regRows(S.E).map((r) => [r[5], r[6]]), [['正取', 1], ['正取', 1]]);
+
+  // without a UI nobody can confirm, so nothing is archived and no form is created
+  const N = schoolEnv({ noUi: true });
+  const keep = N.E.ss.insertSheet('申請登記');
+  keep.getRange(1, 1, 1, 2).setValues([['登記時間', '姓名']]);
+  keep.appendRow([t(0), '測試']);
+  N.E.call('setupForm()');
+  assert.strictEqual(N.E.createdForms.length, 0);
+  assert.strictEqual(N.E.ss.getSheetByName('申請登記'), keep);
 });
 
 ok('quota edited in 軟體清單 takes effect on the next submission', () => {

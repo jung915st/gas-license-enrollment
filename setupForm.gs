@@ -8,6 +8,7 @@
  *
  * setupForm() 第一次執行會建立一份「全新」的表單，回應寫入本試算表的新分頁。
  * 舊表單與舊回應分頁完全不動；程式只處理這份新表單的回應，所以不會和舊資料重複。
+ * 「申請登記」若已有舊表單留下的登記，會改名封存並另開空白分頁 (執行前會先詢問)。
  * 再次執行 setupForm() 只會同步軟體選項與剩餘名額，不會再建立新表單。
  * 要重新建立一份表單時，先執行 resetEnrollmentForm() 解除綁定。
  *
@@ -51,11 +52,7 @@ function setupSheets() {
   const hadRegSheet = !!ss.getSheetByName(REG_SHEET_NAME);
   const regSheet = getRegSheet_(ss);
   if (!hadRegSheet) created.push(REG_SHEET_NAME);
-  regSheet.getRange(2, COL.STATUS, regSheet.getMaxRows() - 1, 1).setDataValidation(
-    SpreadsheetApp.newDataValidation()
-      .requireValueInList([STATUS.OK, STATUS.WAIT, STATUS.INELIGIBLE, STATUS.CANCEL, STATUS.ISSUED], true)
-      .setAllowInvalid(true)
-      .build());
+  prepareRegSheet_(regSheet);
 
   // 序號列表：補上 D 欄「軟體」標題；不存在則建立
   let licenseSheet = ss.getSheetByName(LICENSE_SHEET_NAME);
@@ -75,6 +72,28 @@ function setupSheets() {
     '\n\n請確認「' + SOFTWARE_SHEET_NAME + '」的可用授權數與分配方式。' +
     '分配方式為「序號」的軟體，請在「' + LICENSE_SHEET_NAME + '」貼上序號並於 D 欄標示軟體 (留空視為 ' +
     DEFAULT_SERIAL_SOFTWARE + ')。');
+}
+
+/** 標題列更新為目前版本的欄位，並設定「狀態」欄的下拉選單。不會動到資料列。 */
+function prepareRegSheet_(regSheet) {
+  regSheet.getRange(1, 1, 1, REG_HEADERS.length).setValues([REG_HEADERS]);
+  regSheet.getRange(2, COL.STATUS, regSheet.getMaxRows() - 1, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation()
+      .requireValueInList([STATUS.OK, STATUS.WAIT, STATUS.INELIGIBLE, STATUS.CANCEL, STATUS.ISSUED], true)
+      .setAllowInvalid(true)
+      .build());
+}
+
+/**
+ * 換新表單時，把舊表單留下的登記資料整個分頁改名封存，另開空白的「申請登記」。
+ * 沒有資料列時不封存。回傳封存後的分頁名稱 (沒有封存則為空字串)。
+ */
+function archiveRegistrations_(ss) {
+  const sheet = ss.getSheetByName(REG_SHEET_NAME);
+  if (!sheet || sheet.getLastRow() < 2) return '';
+  const name = REG_SHEET_NAME + '_舊_' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd-HHmmss');
+  sheet.setName(name);
+  return name;
 }
 
 // =====================================================================
@@ -109,6 +128,15 @@ function setupForm() {
     message = '已更新申請表單的軟體選項。';
   } else {
     // 第一次：建立全新的表單，回應寫入本試算表的新分頁
+    const oldRegSheet = ss.getSheetByName(REG_SHEET_NAME);
+    const oldRows = oldRegSheet ? Math.max(0, oldRegSheet.getLastRow() - 1) : 0;
+    if (oldRows > 0 && !confirm_('建立新申請表單',
+      '將建立一份全新的申請表單，回應寫入本試算表的新分頁。\n\n' +
+      '目前「' + REG_SHEET_NAME + '」已有 ' + oldRows + ' 筆來自舊表單的登記，會整個分頁改名封存 (資料保留、不再計入名額)，' +
+      '並另開空白的「' + REG_SHEET_NAME + '」。\n\n要繼續嗎？')) {
+      return;
+    }
+    const archivedName = archiveRegistrations_(ss);
     const sheetIdsBefore = ss.getSheets().map(function (sheet) { return sheet.getSheetId(); });
     form = FormApp.create(FORM_TITLE);
     buildEnrollmentForm_(form, softwareNames);
@@ -120,11 +148,15 @@ function setupForm() {
     if (responseSheet) props.setProperty(PROP.RESPONSE_SHEET_ID, String(responseSheet.getSheetId()));
     message = '已建立新的申請表單，回應會寫入' +
       (responseSheet ? '新分頁「' + responseSheet.getName() + '」。' : '本試算表的新分頁。') +
-      '\n舊表單與舊回應分頁沒有變動，它們的回應不會被登記；不再使用時請自行關閉舊表單。';
+      '\n舊表單與舊回應分頁沒有變動，它們的回應不會被登記；不再使用時請自行關閉舊表單。' +
+      (archivedName ? '\n原有的登記資料已封存為分頁「' + archivedName + '」。' : '');
   }
 
-  const rows = readRegistrations_(getRegSheet_(ss));
-  findItemByTitle_(form, Q_SOFTWARE).setHelpText(buildRemainingText_(computeStats_(rows, softwareList), nowText_()));
+  const regSheet = getRegSheet_(ss);
+  prepareRegSheet_(regSheet);
+  const rows = readRegistrations_(regSheet);
+  const stats = refreshStats_(ss, softwareList, rows);
+  findItemByTitle_(form, Q_SOFTWARE).setHelpText(buildRemainingText_(stats, nowText_()));
 
   notify_(message +
     '\n\n填寫網址：' + form.getPublishedUrl() +
