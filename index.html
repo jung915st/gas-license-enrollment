@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <title>Wordwall 授權帳號確認系統</title>
+    <!-- 使用 Tailwind CSS 來美化介面 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        font-family: 'Inter', 'Noto Sans TC', sans-serif;
+      }
+      .loader {
+        border: 4px solid #f3f3f3;
+        border-radius: 50%;
+        border-top: 4px solid #3498db;
+        width: 24px;
+        height: 24px;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="w-full max-w-md bg-white rounded-lg shadow-md p-8">
+      
+      <h1 class="text-2xl font-bold text-center text-gray-800 mb-2">Wordwall 授權帳號確認</h1>
+      <p class="text-center text-gray-500 mb-6">請輸入您的姓名以查詢授權帳號。</p>
+      
+      <!-- 查詢區 -->
+      <div id="search-section">
+        <label for="name-input" class="block text-sm font-medium text-gray-700">姓名</label>
+        <div class="mt-1 flex items-center gap-2">
+          <input type="text" id="name-input" class="flex-1 block w-full rounded-md border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm px-3 py-2" placeholder="請輸入您的全名">
+          <button id="search-btn" class="inline-flex items-center justify-center px-4 py-2 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+            查詢
+          </button>
+        </div>
+      </div>
+      
+      <!-- 載入中指示器 -->
+      <div id="loader" class="hidden flex justify-center my-4">
+        <div class="loader"></div>
+      </div>
+
+      <!-- 結果與確認區 -->
+      <div id="result-section" class="hidden mt-6">
+        <p class="text-sm text-gray-600">查詢結果：</p>
+        <p class="text-lg font-semibold text-indigo-600 bg-indigo-50 p-3 rounded-md" id="account-display"></p>
+        
+        <form id="confirmation-form" class="mt-4 space-y-4">
+          <fieldset>
+            <legend class="text-base font-medium text-gray-900">請問此帳號是否正確？</legend>
+            <div class="mt-2 space-y-2">
+              <div class="flex items-center">
+                <input id="status-correct" name="status" type="radio" value="correct" class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300" checked>
+                <label for="status-correct" class="ml-3 block text-sm font-medium text-gray-700">正確，沒有問題</label>
+              </div>
+              <div class="flex items-center">
+                <input id="status-modify" name="status" type="radio" value="modify" class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300">
+                <label for="status-modify" class="ml-3 block text-sm font-medium text-gray-700">需修改</glabel>
+              </div>
+            </div>
+          </fieldset>
+          
+          <!-- 修改用文字區塊 -->
+          <div id="modify-section" class="hidden">
+            <label for="new-email-input" class="block text-sm font-medium text-gray-700">請輸入新的 Email 帳號</label>
+            <textarea id="new-email-input" rows="2" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500" placeholder="example@email.com"></textarea>
+          </div>
+          
+          <button type="submit" id="submit-btn" class="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+            送出確認
+          </button>
+        </form>
+      </div>
+      
+      <!-- 狀態訊息 -->
+      <div id="status-message" class="mt-4 text-center text-sm font-medium"></div>
+
+    </div>
+
+    <script>
+      let currentName = '';
+
+      const searchBtn = document.getElementById('search-btn');
+      const nameInput = document.getElementById('name-input');
+      const loader = document.getElementById('loader');
+      const resultSection = document.getElementById('result-section');
+      const accountDisplay = document.getElementById('account-display');
+      const statusMessage = document.getElementById('status-message');
+      const confirmationForm = document.getElementById('confirmation-form');
+      const modifySection = document.getElementById('modify-section');
+      const submitBtn = document.getElementById('submit-btn');
+
+      // 監聽查詢按鈕點擊事件
+      searchBtn.addEventListener('click', handleSearch);
+      nameInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          handleSearch();
+        }
+      });
+      
+      function handleSearch() {
+        const name = nameInput.value.trim();
+        if (!name) {
+          showMessage('請輸入您的姓名。', 'red');
+          return;
+        }
+
+        currentName = name;
+        loader.classList.remove('hidden');
+        resultSection.classList.add('hidden');
+        showMessage('', 'green'); // 清除舊訊息
+        
+        google.script.run
+          .withSuccessHandler(displayResult)
+          .withFailureHandler(showError)
+          .findAccount(name);
+      }
+
+      // 顯示查詢結果
+      function displayResult(result) {
+        loader.classList.add('hidden');
+        if (result && result.account) {
+          accountDisplay.textContent = result.account;
+          resultSection.classList.remove('hidden');
+        } else {
+          showMessage('找不到您的姓名，請確認輸入是否正確？或您沒有申請', 'red');
+        }
+      }
+
+      // 監聽表單選項變更
+      confirmationForm.elements['status'].forEach(radio => {
+        radio.addEventListener('change', function() {
+          if (this.value === 'modify') {
+            modifySection.classList.remove('hidden');
+          } else {
+            modifySection.classList.add('hidden');
+          }
+        });
+      });
+
+      // 監聽表單提交
+      confirmationForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const status = this.elements['status'].value;
+        let newEmail = null;
+
+        if (status === 'modify') {
+          newEmail = document.getElementById('new-email-input').value.trim();
+          if (!newEmail || !/^\S+@\S+\.\S+$/.test(newEmail)) {
+            showMessage('請輸入有效的 Email 格式。', 'red');
+            return;
+          }
+        }
+        
+        submitBtn.disabled = true;
+        submitBtn.textContent = '處理中...';
+        loader.classList.remove('hidden');
+
+        google.script.run
+          .withSuccessHandler(showUpdateStatus)
+          .withFailureHandler(showError)
+          .updateStatus(currentName, status, newEmail);
+      });
+
+      // 顯示更新後的狀態
+      function showUpdateStatus(message) {
+        loader.classList.add('hidden');
+        resultSection.classList.add('hidden');
+        nameInput.value = '';
+        showMessage(message, 'green');
+        
+        // 重置按鈕
+        submitBtn.disabled = false;
+        submitBtn.textContent = '送出確認';
+      }
+      
+      // 顯示錯誤訊息
+      function showError(error) {
+        loader.classList.add('hidden');
+        submitBtn.disabled = false;
+        submitBtn.textContent = '送出確認';
+        showMessage('發生錯誤：' + error.message, 'red');
+      }
+
+      // 統一的訊息顯示函數
+      function showMessage(msg, color) {
+        statusMessage.textContent = msg;
+        statusMessage.className = `mt-4 text-center text-sm font-medium text-${color}-600`;
+      }
+
+    </script>
+  </body>
+</html>

@@ -1,0 +1,6 @@
+# clasp: project binding and credentials stay on the deploy host
+.clasp.json
+.clasprc.json
+node_modules/
+# local-only copies of pre-v3 files (history is in git)
+backup/
