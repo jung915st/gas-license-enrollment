@@ -12,7 +12,7 @@
 |---|---|
 | `code.gs` | 設定、表單送出登記、正取／備取排序、統計 |
 | `allocate.gs` | 「授權管理」選單、發放、通知、補登 |
-| `setupForm.gs` | 初始化分頁、建立／就地更新申請表單（職務跳題、TeacherSay 必選、Google AI Pro 分支）、觸發器 |
+| `setupForm.gs` | 初始化分頁、建立／就地更新申請表單（TeacherSay 必選＋下拉選單另選一項、職務跳題、Google AI Pro 分支）、觸發器 |
 | `confirm.gs`、`index.html` | Wordwall 帳號確認網頁 |
 | `tests_enrollment.gs` | Apps Script 內的離線單元測試 `runEnrollmentTests()` |
 | `test/run-tests.js` | 以 Node 模擬 Apps Script 執行完整流程 |

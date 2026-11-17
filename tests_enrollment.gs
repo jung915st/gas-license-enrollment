@@ -96,23 +96,58 @@ function runEnrollmentTests() {
   check('行政／幼兒園：職務與組別', [kgSub.identity, kgSub.group], ['行政／幼兒園', '行政']);
   check('行政處室選項含幼兒園', OFFICE_CHOICES.indexOf('幼兒園') >= 0, true);
 
-  // --- 三題軟體合併 ---
-  const pick = function (software, teacherSay, aiPro) { return collectSelections_(software, teacherSay, aiPro, softwareList); };
-  check('TeacherSay＋其他軟體＋Google AI Pro「是」，依清單順序',
-    pick('HiTeach 專業版, Kahoot 教師版', 'TeacherSay 專業版', '是'),
+  // --- 軟體題合併 ---
+  const pick = function (texts, aiPro) { return collectSelections_(texts, aiPro, softwareList); };
+  check('TeacherSay＋下拉選單一項，依清單順序', pick(['TeacherSay 專業版', 'HiTeach 專業版'], null),
+    ['TeacherSay 專業版', 'HiTeach 專業版']);
+  check('下拉選單選 Google AI Pro', pick(['TeacherSay 專業版', 'Google AI Pro 教育版'], null), ['TeacherSay 專業版', 'Google AI Pro 教育版']);
+  check('「不申請其他軟體」不算一項', pick(['TeacherSay 專業版', NONE_CHOICE], null), ['TeacherSay 專業版']);
+  check('v3.2 舊回應：核取方塊多項＋是／否題「是」', pick(['TeacherSay 專業版', 'HiTeach 專業版, Kahoot 教師版'], '是'),
     ['TeacherSay 專業版', 'Kahoot 教師版', 'HiTeach 專業版', 'Google AI Pro 教育版']);
-  check('Google AI Pro「否」不加入', pick('Padlet 學校版', 'TeacherSay 專業版', '否'), ['TeacherSay 專業版', 'Padlet 學校版']);
-  check('只勾 TeacherSay', pick('', 'TeacherSay 專業版', '否'), ['TeacherSay 專業版']);
-  check('v3.1 舊回應：Google AI Pro 在核取方塊內、沒有新題目', pick('Google AI Pro 教育版, Wordwall 專業版', null, null),
+  check('v3.2 舊回應：是／否題「否」不加入', pick(['TeacherSay 專業版', 'Padlet 學校版'], '否'), ['TeacherSay 專業版', 'Padlet 學校版']);
+  check('v3.1 舊回應：Google AI Pro 在核取方塊內', pick([null, 'Google AI Pro 教育版, Wordwall 專業版'], null),
     ['Wordwall 專業版', 'Google AI Pro 教育版']);
-  check('軟體清單沒有 Google AI Pro 時「是」不加入',
-    collectSelections_('', 'TeacherSay 專業版', '是', parseSoftwareRows_([['TeacherSay 專業版', '不限', '帳號', '']])), ['TeacherSay 專業版']);
-  const fullNv = {};
-  fullNv[Q_NAME] = ['王']; fullNv[Q_EMAIL] = ['w@gmail.com']; fullNv[Q_ROLE] = ['學年']; fullNv[Q_GRADE] = ['二年級'];
-  fullNv[Q_TEACHERSAY] = ['TeacherSay 專業版']; fullNv[Q_SOFTWARE] = ['']; fullNv[Q_AI_PRO] = ['是'];
-  fullNv[Q_WORKSPACE] = ['w@mail.lres.tc.edu.tw'];
-  check('parseSubmission_ 讀取三題', parseSubmission_(fullNv, softwareList, at(0)).selections,
+  check('軟體清單沒有 Google AI Pro 時舊題「是」不加入',
+    collectSelections_(['TeacherSay 專業版'], '是', parseSoftwareRows_([['TeacherSay 專業版', '不限', '帳號', '']])), ['TeacherSay 專業版']);
+
+  const nvOf = function (role, detailKey, detail, extra) {
+    const nv = {};
+    nv[Q_NAME] = ['王']; nv[Q_EMAIL] = ['w@gmail.com']; nv[Q_ROLE] = [role]; nv[detailKey] = [detail];
+    nv[Q_TEACHERSAY] = ['TeacherSay 專業版']; nv[Q_PICK] = ['']; nv[Q_PICK_OFFICE] = [''];
+    nv[Q_WORKSPACE] = [''];
+    Object.keys(extra || {}).forEach(function (key) { nv[key] = [extra[key]]; });
+    return nv;
+  };
+  const aiPickNv = {}; aiPickNv[Q_PICK] = 'Google AI Pro 教育版'; aiPickNv[Q_WORKSPACE] = 'w@mail.lres.tc.edu.tw';
+  check('parseSubmission_：學年選 Google AI Pro', parseSubmission_(nvOf('學年', Q_GRADE, '二年級', aiPickNv), softwareList, at(0)).selections,
     ['TeacherSay 專業版', 'Google AI Pro 教育版']);
+  const officePickNv = {}; officePickNv[Q_PICK_OFFICE] = 'Wordwall 專業版'; officePickNv[Q_PICK] = 'Kahoot 教師版';
+  check('parseSubmission_：行政只採用行政的選單', parseSubmission_(nvOf('行政', Q_OFFICE, '幼兒園', officePickNv), softwareList, at(0)).selections,
+    ['TeacherSay 專業版', 'Wordwall 專業版']);
+  const teacherPickNv = {}; teacherPickNv[Q_PICK] = 'Kahoot 教師版'; teacherPickNv[Q_PICK_OFFICE] = 'Wordwall 專業版';
+  check('parseSubmission_：科任只採用學年／科任的選單', parseSubmission_(nvOf('科任', Q_SUBJECT, '自然', teacherPickNv), softwareList, at(0)).selections,
+    ['TeacherSay 專業版', 'Kahoot 教師版']);
+  const noneNv = {}; noneNv[Q_PICK] = NONE_CHOICE;
+  check('parseSubmission_：不申請其他軟體', parseSubmission_(nvOf('學年', Q_GRADE, '一年級', noneNv), softwareList, at(0)).selections,
+    ['TeacherSay 專業版']);
+  const legacyNv = {};
+  legacyNv[Q_NAME] = ['王']; legacyNv[Q_EMAIL] = ['w@gmail.com']; legacyNv[Q_ROLE] = ['學年']; legacyNv[Q_GRADE] = ['二年級'];
+  legacyNv[Q_TEACHERSAY] = ['TeacherSay 專業版']; legacyNv[Q_SOFTWARE] = ['']; legacyNv[Q_AI_PRO] = ['是'];
+  check('parseSubmission_：v3.2 回應分頁沒有新題目也能解析', parseSubmission_(legacyNv, softwareList, at(0)).selections,
+    ['TeacherSay 專業版', 'Google AI Pro 教育版']);
+
+  // --- 同一帳號另登記其他軟體的提醒 ---
+  const held = [
+    { email: 'W@gmail.com', software: 'TeacherSay 專業版', status: STATUS.OK },
+    { email: 'w@gmail.com', software: 'Kahoot 教師版', status: STATUS.OK },
+    { email: 'w@gmail.com', software: 'Padlet 學校版', status: STATUS.CANCEL },
+    { email: 'x@gmail.com', software: 'HiTeach 專業版', status: STATUS.OK }
+  ];
+  check('另登記提醒：已有 Kahoot 再登記 HiTeach', otherSoftwareNotes_(held, { email: 'w@gmail.com' }, ['HiTeach 專業版']),
+    { 'HiTeach 專業版': '此帳號另登記了：Kahoot 教師版（每人除 TeacherSay 外限一項，請確認）' });
+  check('另登記提醒：取消的與 TeacherSay 不算', otherSoftwareNotes_(held.slice(2), { email: 'w@gmail.com' }, ['TeacherSay 專業版', 'HiTeach 專業版']), {});
+  check('另登記提醒：同一筆舊回應勾了兩項', otherSoftwareNotes_([], { email: 'n@gmail.com' }, ['Kahoot 教師版', 'HiTeach 專業版']),
+    { 'HiTeach 專業版': '此帳號另登記了：Kahoot 教師版（每人除 TeacherSay 外限一項，請確認）' });
 
   // --- 學校帳號規則 (表單驗證用) ---
   const schoolRe = new RegExp(schoolAccountPattern_());
@@ -171,6 +206,9 @@ function runEnrollmentTests() {
   check('剩餘文字：額滿', text.indexOf('・Kahoot 教師版：已額滿（備取 1 人）') >= 0, true);
   check('剩餘文字：未額滿', text.indexOf('・HiTeach 專業版：剩餘 15／15') >= 0, true);
   check('剩餘文字：TeacherSay 不限名額', text.indexOf('・TeacherSay 專業版：不限名額（每位申請者必選）') >= 0, true);
+  const officeText = buildRemainingText_(computeStats_(kahoot.concat(ai), softwareList), '', ['TeacherSay 專業版', 'Google AI Pro 教育版']);
+  check('剩餘文字：行政選單不列 TeacherSay 與 Google AI Pro',
+    [officeText.indexOf('TeacherSay 專業版：'), officeText.indexOf('Google AI Pro'), officeText.indexOf('・Kahoot 教師版') >= 0], [-1, -1, true]);
   const unlimited = [];
   for (let i = 0; i < 30; i++) unlimited.push(reg(i, 'u' + i + '@x.tw', '科任', 'TeacherSay 專業版'));
   check('不限名額：30 人全部正取', applyRank(unlimited).every(function (row) { return row.status === STATUS.OK; }), true);

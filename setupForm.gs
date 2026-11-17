@@ -12,26 +12,27 @@
  * 再次執行 setupForm() 會就地更新同一份表單 (說明、題目、選項、跳題、剩餘名額)，不會再建立新表單。
  * 要重新建立一份表單時，先執行 resetEnrollmentForm() 解除綁定。
  *
- * 表單結構與跳題：
+ * 表單結構與跳題 (每次填表最多 2 項：TeacherSay ＋ 另選 1 項)：
  *   區段 1 基本資料：姓名、開通授權的 Google 帳號
  *   區段 2【TeacherSay 專業版】：必填核取方塊 (預填連結會預先勾選)
  *     未勾選就無法前往下一頁，也就看不到其他軟體選項
- *   區段 3 申請軟體授權：其他軟體 (複選，選填)
- *   區段 4【職務】：學年 → 區段 5；科任 → 區段 6；行政 → 區段 7
- *   區段 5【學年】任教學年、區段 6【科任】任教科目 → 填完都到 區段 8
- *   區段 7【行政】所屬處室 → 填完直接送出 (行政不提供 Google AI Pro，由管理者另行分配)
- *   區段 8【Google AI Pro 教育版】是否申請？ 是 → 區段 9；否 → 送出
+ *   區段 3【職務】：學年 → 區段 4；科任 → 區段 5；行政 → 區段 6
+ *   區段 4【學年】任教學年、區段 5【科任】任教科目 → 填完都到 區段 7
+ *   區段 6【行政】所屬處室 → 填完到 區段 8
+ *   區段 7 申請軟體授權：下拉選單限選一項 (含 Google AI Pro、不申請其他軟體)
+ *     選 Google AI Pro → 區段 9；其他選項 → 送出
+ *   區段 8 申請軟體授權（行政）：下拉選單限選一項 (不含 Google AI Pro，由管理者另行分配) → 送出
  *   區段 9【Google AI Pro 學校帳號】：學校帳號 (必填，限 @SCHOOL_DOMAIN)
  */
 
 const FORM_TITLE = '教學軟體授權申請表';
 const TEACHERSAY_NOTICE = '本次軟體使用申請需協助提交使用成果，同時配合取得並使用TeacherSay。';
 const FORM_DESCRIPTION =
-  '請勾選要申請的教學軟體授權，每人每項限登記 1 個。\n' +
+  '每次填表最多申請 2 項軟體：已預設申請 TeacherSay 專業版，只能再選填 1 項（也可以不選）。\n' +
   TEACHERSAY_NOTICE + '\n' +
   '系統依登記先後排序，名額內為正取，額滿後登記為備取。\n' +
   '登記不代表已取得授權：資訊組審核後，會寄信到您填寫的 Google 帳號，通知授權序號或開通方式。\n' +
-  'Google AI Pro 教育版限' + LIMIT_PER_GROUP_TEXT + '可申請，並須填寫學校帳號（@' + SCHOOL_DOMAIN + '）；' +
+  'Google AI Pro 教育版限' + LIMIT_PER_GROUP_TEXT + '可申請（算在另選的 1 項內），並須填寫學校帳號（@' + SCHOOL_DOMAIN + '）；' +
   '行政人員的 Google AI Pro 由資訊組另行分配。';
 
 // 區段標題 (setupForm 以標題辨識既有表單上的區段)
@@ -41,8 +42,9 @@ const PAGE_ROLE = '【職務】';
 const PAGE_GRADE = '【學年】';
 const PAGE_SUBJECT = '【科任】';
 const PAGE_OFFICE = '【行政】';
-const PAGE_AI_PRO = '【Google AI Pro 教育版】';
+const PAGE_SOFTWARE_OFFICE = '申請軟體授權（行政）';
 const PAGE_WORKSPACE = '【Google AI Pro 學校帳號】';
+const PAGE_AI_PRO = '【Google AI Pro 教育版】'; // 舊 (v3.2) 的是／否題區段，更新表單時刪除
 const OFFICE_AI_NOTICE = '行政人員的 Google AI Pro 教育版授權由資訊組另行分配，本表單不提供申請。';
 
 // =====================================================================
@@ -189,7 +191,7 @@ function setupForm() {
   prepareRegSheet_(regSheet);
   const rows = readRegistrations_(regSheet);
   const stats = refreshStats_(ss, softwareList, rows);
-  findItemByTitle_(form, Q_SOFTWARE).setHelpText(buildRemainingText_(stats, nowText_()));
+  applyRemainingHelp_(form, stats);
 
   const prefillUrl = buildPrefilledUrl_(form);
   props.setProperty(PROP.PREFILL_URL, prefillUrl);
@@ -225,7 +227,8 @@ function buildEnrollmentForm_(form) {
 
 /**
  * 讓表單的說明、區段順序、題目與跳轉符合目前版本 (見檔案開頭的表單結構)。
- * 新表單與 v3.1 建立的表單都適用；可重複執行。缺少的題目或區段會新增，所有已知題目都移到固定位置；
+ * 新表單與 v3.1／v3.2 建立的表單都適用；可重複執行。缺少的題目或區段會新增，所有已知題目都移到固定位置，
+ * 舊版的軟體核取方塊、Google AI Pro 是／否題與其區段會刪除 (回應分頁的舊欄位與資料保留)。
  * 既有題目以標題辨識、就地修改，所以回應分頁的既有欄位與資料不受影響。
  * @returns {string[]} 變更說明
  */
@@ -254,6 +257,7 @@ function syncEnrollmentForm_(form, softwareList) {
     return find(title, type, label);
   };
   const newPage = function () { return form.addPageBreakItem(); };
+  const newList = function () { return form.addListItem(); };
 
   form.setDescription(FORM_DESCRIPTION);
 
@@ -261,8 +265,6 @@ function syncEnrollmentForm_(form, softwareList) {
   const email = need(Q_EMAIL, T.TEXT, '簡答');
   const pageTeacherSay = ensure(PAGE_TEACHERSAY, T.PAGE_BREAK, '區段', newPage);
   const teacherSay = ensure(Q_TEACHERSAY, T.CHECKBOX, '核取方塊', function () { return form.addCheckboxItem(); });
-  const pageSoftware = ensure(PAGE_SOFTWARE, T.PAGE_BREAK, '區段', newPage);
-  const software = ensure(Q_SOFTWARE, T.CHECKBOX, '核取方塊', function () { return form.addCheckboxItem(); });
   const pageRole = ensure(PAGE_ROLE, T.PAGE_BREAK, '區段', newPage);
   const role = need(Q_ROLE, T.MULTIPLE_CHOICE, '單選');
   const pageGrade = need(PAGE_GRADE, T.PAGE_BREAK, '區段');
@@ -271,14 +273,16 @@ function syncEnrollmentForm_(form, softwareList) {
   const subject = need(Q_SUBJECT, T.TEXT, '簡答');
   const pageOffice = need(PAGE_OFFICE, T.PAGE_BREAK, '區段');
   const office = need(Q_OFFICE, T.MULTIPLE_CHOICE, '單選');
-  const pageAi = ensure(PAGE_AI_PRO, T.PAGE_BREAK, '區段', newPage);
-  const aiPro = ensure(Q_AI_PRO, T.MULTIPLE_CHOICE, '單選', function () { return form.addMultipleChoiceItem(); });
+  const pageSoftware = ensure(PAGE_SOFTWARE, T.PAGE_BREAK, '區段', newPage);
+  const pick = ensure(Q_PICK, T.LIST, '下拉選單', newList);
+  const pageSoftwareOffice = ensure(PAGE_SOFTWARE_OFFICE, T.PAGE_BREAK, '區段', newPage);
+  const pickOffice = ensure(Q_PICK_OFFICE, T.LIST, '下拉選單', newList);
   const pageWorkspace = ensure(PAGE_WORKSPACE, T.PAGE_BREAK, '區段', newPage);
   const workspace = ensure(Q_WORKSPACE, T.TEXT, '簡答', function () { return form.addTextItem(); });
 
   // ---------- 排列順序：從「Google 帳號」之後依序排好 ----------
-  [pageTeacherSay, teacherSay, pageSoftware, software, pageRole, role, pageGrade, grade, pageSubject, subject,
-    pageOffice, office, pageAi, aiPro, pageWorkspace, workspace].reduce(function (anchor, item) {
+  [pageTeacherSay, teacherSay, pageRole, role, pageGrade, grade, pageSubject, subject, pageOffice, office,
+    pageSoftware, pick, pageSoftwareOffice, pickOffice, pageWorkspace, workspace].reduce(function (anchor, item) {
     placeAfter_(form, item, anchor);
     return item;
   }, email);
@@ -290,14 +294,7 @@ function syncEnrollmentForm_(form, softwareList) {
     .setHelpText(TEACHERSAY_NOTICE + '\n請勾選後再按「下一頁」，未勾選無法選擇其他軟體，也無法送出表單。')
     .setRequired(true);
 
-  // ---------- 區段 3 申請軟體授權：TeacherSay 與 Google AI Pro 不在這題 ----------
-  const otherNames = softwareList
-    .map(function (sw) { return sw.name; })
-    .filter(function (name) { return name !== REQUIRED_SOFTWARE && name !== WORKSPACE_ACCOUNT_SOFTWARE; });
-  if (otherNames.length > 0) software.asCheckboxItem().setChoiceValues(otherNames);
-  software.asCheckboxItem().setRequired(false);
-
-  // ---------- 區段 4【職務】與 5～7 ----------
+  // ---------- 區段 3【職務】與 4～6 ----------
   const roleItem = role.asMultipleChoiceItem();
   roleItem.setChoices([
     roleItem.createChoice(ROLE.GRADE, pageGrade.asPageBreakItem()),
@@ -309,14 +306,21 @@ function syncEnrollmentForm_(form, softwareList) {
   officeItem.setChoiceValues(OFFICE_CHOICES);
   pageOffice.asPageBreakItem().setHelpText(OFFICE_AI_NOTICE);
 
-  // ---------- 區段 8【Google AI Pro】：是 → 學校帳號；否 → 送出 ----------
-  const aiItem = aiPro.asMultipleChoiceItem();
-  aiItem.setChoices([
-    aiItem.createChoice(AI_YES, pageWorkspace.asPageBreakItem()),
-    aiItem.createChoice(AI_NO, NAV.SUBMIT)
-  ]);
-  aiItem.setHelpText('限' + LIMIT_PER_GROUP_TEXT + '，依登記先後排序。選「' + AI_YES + '」須在下一頁填寫學校帳號才能送出。')
-    .setRequired(true);
+  // ---------- 區段 7、8：另選一項 (下拉選單，必填，可選「不申請其他軟體」) ----------
+  // TeacherSay 不在選單內；行政的選單不含 Google AI Pro。選 Google AI Pro → 學校帳號頁，其餘 → 送出。
+  const others = softwareList
+    .map(function (sw) { return sw.name; })
+    .filter(function (name) { return name !== REQUIRED_SOFTWARE; });
+  const pickItem = pick.asListItem();
+  pickItem.setChoices(others.map(function (name) {
+    return pickItem.createChoice(name, name === WORKSPACE_ACCOUNT_SOFTWARE ? pageWorkspace.asPageBreakItem() : NAV.SUBMIT);
+  }).concat([pickItem.createChoice(NONE_CHOICE, NAV.SUBMIT)])).setRequired(true);
+  const pickOfficeItem = pickOffice.asListItem();
+  pickOfficeItem.setChoices(others
+    .filter(function (name) { return name !== WORKSPACE_ACCOUNT_SOFTWARE; })
+    .concat([NONE_CHOICE])
+    .map(function (name) { return pickOfficeItem.createChoice(name, NAV.SUBMIT); })).setRequired(true);
+  pageSoftwareOffice.asPageBreakItem().setHelpText(OFFICE_AI_NOTICE);
 
   // ---------- 區段 9 學校帳號：必填且限學校網域 ----------
   pageWorkspace.asPageBreakItem().setHelpText('Google AI Pro 教育版會開通在學校帳號。');
@@ -330,15 +334,37 @@ function syncEnrollmentForm_(form, softwareList) {
 
   // ---------- 區段之間的跳轉 ----------
   // 分頁符號的 setGoToPage：依序填完「這個分頁符號之前的區段」後要前往哪裡。
-  // 區段裡有依答案跳轉的單選題時 (職務、Google AI Pro)，以單選題為準。
-  pageTeacherSay.asPageBreakItem().setGoToPage(NAV.CONTINUE); // 基本資料 → TeacherSay
-  pageSoftware.asPageBreakItem().setGoToPage(NAV.CONTINUE);   // TeacherSay → 申請軟體授權
-  pageRole.asPageBreakItem().setGoToPage(NAV.CONTINUE);       // 申請軟體授權 → 職務
-  pageSubject.asPageBreakItem().setGoToPage(pageAi.asPageBreakItem());      // 學年填完 → Google AI Pro
-  pageOffice.asPageBreakItem().setGoToPage(pageAi.asPageBreakItem());       // 科任填完 → Google AI Pro
-  pageAi.asPageBreakItem().setGoToPage(NAV.SUBMIT);                         // 行政填完 → 送出 (看不到 Google AI Pro)
+  // 區段裡有依答案跳轉的題目時 (職務、學年／科任的下拉選單)，以題目為準。
+  pageTeacherSay.asPageBreakItem().setGoToPage(NAV.CONTINUE);                     // 基本資料 → TeacherSay
+  pageRole.asPageBreakItem().setGoToPage(NAV.CONTINUE);                           // TeacherSay → 職務
+  pageGrade.asPageBreakItem().setGoToPage(NAV.CONTINUE);                          // (職務依答案跳轉)
+  pageSubject.asPageBreakItem().setGoToPage(pageSoftware.asPageBreakItem());      // 學年填完 → 申請軟體授權
+  pageOffice.asPageBreakItem().setGoToPage(pageSoftware.asPageBreakItem());       // 科任填完 → 申請軟體授權
+  pageSoftware.asPageBreakItem().setGoToPage(pageSoftwareOffice.asPageBreakItem()); // 行政填完 → 申請軟體授權（行政）
+  pageSoftwareOffice.asPageBreakItem().setGoToPage(NAV.CONTINUE);                 // (學年／科任的選單依答案跳轉)
+  pageWorkspace.asPageBreakItem().setGoToPage(NAV.SUBMIT);                        // 行政的選單填完 → 送出
+
+  // ---------- 刪除舊版題目 (v3.1／v3.2)；先刪題目再刪區段 ----------
+  [Q_SOFTWARE, Q_AI_PRO, PAGE_AI_PRO].forEach(function (title) {
+    let item = findItemByTitle_(form, title);
+    while (item) {
+      form.deleteItem(item.getIndex());
+      changes.push('・刪除舊題「' + title + '」（回應試算表的舊欄位與資料保留）');
+      item = findItemByTitle_(form, title);
+    }
+  });
 
   return changes;
+}
+
+/** 兩份下拉選單下方的剩餘名額 (各自只列選單裡有的軟體)。 */
+function applyRemainingHelp_(form, stats) {
+  const now = nowText_();
+  const pick = findItemByTitle_(form, Q_PICK);
+  if (pick) pick.setHelpText(buildRemainingText_(stats, now, [REQUIRED_SOFTWARE]));
+  const pickOffice = findItemByTitle_(form, Q_PICK_OFFICE);
+  if (pickOffice) pickOffice.setHelpText(buildRemainingText_(stats, now, [REQUIRED_SOFTWARE, WORKSPACE_ACCOUNT_SOFTWARE]));
+  return !!(pick || pickOffice);
 }
 
 /**
@@ -415,10 +441,7 @@ function findItemByTitle_(form, title) {
 function refreshFormRemaining_(ss, stats) {
   const form = getEnrollmentForm_();
   if (!form) return false;
-  const item = findItemByTitle_(form, Q_SOFTWARE);
-  if (!item) return false;
-  item.setHelpText(buildRemainingText_(stats, nowText_()));
-  return true;
+  return applyRemainingHelp_(form, stats);
 }
 
 /**

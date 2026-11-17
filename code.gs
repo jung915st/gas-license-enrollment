@@ -1,5 +1,5 @@
 // 教學軟體授權登記與分配系統
-// 版本 v3.2
+// 版本 v3.3
 // 更新：表單送出改為「登記」，依登記先後排定正取／備取，不再自動發放序號。
 //       管理者在「申請登記」分頁勾選核准後，再由 allocate.gs 從「序號列表」發放並寄信通知。
 // v3.1：改用 setupForm() 建立的新表單 (舊表單的回應一律忽略，避免重複紀錄)；
@@ -7,6 +7,9 @@
 //       並副本給 Google AI Pro 的學校帳號。
 // v3.2：TeacherSay 專業版為必選 (未勾選無法送出)；Google AI Pro 改為「是／否」題，
 //       選「是」才進入學校帳號頁且必填；行政處室加「幼兒園」；可用授權數可填「不限」。
+// v3.3：每次填表最多 2 項：TeacherSay (必選) ＋ 另選 1 項。其他軟體改為下拉選單 (單選)，
+//       Google AI Pro 併入學年／科任的下拉選單 (選它才進入學校帳號頁)；行政另有一份不含 Google AI Pro 的下拉選單。
+//       同一帳號另登記了其他軟體時，在「申請登記」備註提醒管理者。
 //
 // 檔案分工：
 //   code.gs             設定、表單送出登記、正取／備取排序、統計
@@ -30,12 +33,16 @@ const Q_ROLE = '您的職務（學年／科任／行政）';       // 依選項�
 const Q_GRADE = '任教學年';
 const Q_SUBJECT = '任教科目';
 const Q_OFFICE = '所屬處室';
-const Q_TEACHERSAY = 'TeacherSay 專業版（必選）';          // 必填核取方塊，只有一個選項
-const Q_SOFTWARE = '您要申請的軟體授權';                    // 其他軟體 (不含 TeacherSay、Google AI Pro)
-const Q_AI_PRO = '是否申請 Google AI Pro 教育版？';          // 是 → 學校帳號頁；否 → 送出
-const Q_WORKSPACE = '申請 Google AI Pro 教育版的學校帳號';   // 選「是」才出現且必填；授權通知信的副本收件信箱
+const Q_TEACHERSAY = 'TeacherSay 專業版（必選）';            // 必填核取方塊，只有一個選項
+const Q_PICK = '您要另外申請的軟體（限選一項）';              // 學年／科任的下拉選單，含 Google AI Pro
+const Q_PICK_OFFICE = '您要另外申請的軟體（行政，限選一項）'; // 行政的下拉選單，不含 Google AI Pro
+const NONE_CHOICE = '不申請其他軟體（只申請 TeacherSay）';   // 下拉選單的「不另外申請」選項
+const Q_WORKSPACE = '申請 Google AI Pro 教育版的學校帳號';     // 選 Google AI Pro 才出現且必填；授權通知信的副本收件信箱
+
+// 舊版題目 (v3.1／v3.2)：setupForm() 更新表單時會刪除，只用來解析回應分頁裡的舊回應 (補登用)
+const Q_SOFTWARE = '您要申請的軟體授權';            // 舊：其他軟體核取方塊 (可複選)
+const Q_AI_PRO = '是否申請 Google AI Pro 教育版？';  // 舊：是／否題
 const AI_YES = '是';
-const AI_NO = '否';
 
 const ROLE = { GRADE: '學年', SUBJECT: '科任', OFFICE: '行政' };
 const GRADE_CHOICES = ['一年級', '二年級', '三年級', '四年級', '五年級', '六年級'];
@@ -175,7 +182,7 @@ function processSubmission_(ss, sub, softwareList) {
   let rows = readRegistrations_(sheet);
   const split = splitSelections_(rows, sub);
   if (split.toAdd.length > 0) {
-    appendRegistrations_(sheet, sub, split.toAdd);
+    appendRegistrations_(sheet, sub, split.toAdd, otherSoftwareNotes_(rows, sub, split.toAdd));
     rows = readRegistrations_(sheet);
   }
   applyRanks_(sheet, rows, softwareList);
@@ -269,14 +276,17 @@ function parseSoftwareSelection_(answer, softwareList) {
 function parseSubmission_(namedValues, softwareList, time) {
   const name = answerOf_(namedValues, Q_NAME);
   const email = answerOf_(namedValues, Q_EMAIL);
-  const software = answerOf_(namedValues, Q_SOFTWARE);
   const role = answerOf_(namedValues, Q_ROLE);
+  const teacherSay = answerOf_(namedValues, Q_TEACHERSAY);
+  const pick = answerOf_(namedValues, Q_PICK);
+  const pickOffice = answerOf_(namedValues, Q_PICK_OFFICE);
+  const software = answerOf_(namedValues, Q_SOFTWARE);
 
   const missing = [];
   if (name === null) missing.push(Q_NAME);
   if (email === null) missing.push(Q_EMAIL);
   if (role === null) missing.push(Q_ROLE);
-  if (software === null) missing.push(Q_SOFTWARE);
+  if ([teacherSay, pick, pickOffice, software].every(function (answer) { return answer === null; })) missing.push(Q_PICK);
   if (missing.length > 0) {
     throw new Error('表單找不到題目：「' + missing.join('」、「') + '」。目前表單題目為：' +
       Object.keys(namedValues).join('、') + '。請確認表單題目未被改名，或修改 code.gs 的 Q_ 設定。');
@@ -290,18 +300,23 @@ function parseSubmission_(namedValues, softwareList, time) {
     identity: identity,
     group: groupOf_(identity),
     workspace: answerOf_(namedValues, Q_WORKSPACE) || '',
-    selections: collectSelections_(software, answerOf_(namedValues, Q_TEACHERSAY),
+    // 只採用與職務相符的那一份下拉選單 (另一份是沒走到的分支)
+    selections: collectSelections_([teacherSay, groupOf_(identity) === ROLE.OFFICE ? pickOffice : pick, software],
       answerOf_(namedValues, Q_AI_PRO), softwareList)
   };
 }
 
 /**
- * 合併三題的勾選結果，依「軟體清單」的順序排列。
- * TeacherSay 題與其他軟體題用名稱比對；Google AI Pro 題回答「是」時加入 Google AI Pro。
- * (v3.1 表單把 Google AI Pro 放在軟體核取方塊內，名稱比對仍可辨識，補登舊回應不受影響。)
+ * 合併各軟體題的答案，依「軟體清單」的順序排列。
+ * texts：TeacherSay 題、下拉選單、舊版核取方塊題的答案，用軟體名稱比對；「不申請其他軟體」不算。
+ * aiPro：舊版「是否申請 Google AI Pro」題，回答「是」時加入 Google AI Pro。
+ * (v3.1 把 Google AI Pro 放在核取方塊內、v3.2 用是／否題，補登舊回應時都能辨識。)
  */
-function collectSelections_(software, teacherSay, aiPro, softwareList) {
-  const wanted = parseSoftwareSelection_([software, teacherSay].filter(function (text) { return text; }).join(', '), softwareList);
+function collectSelections_(texts, aiPro, softwareList) {
+  const answered = texts.filter(function (text) {
+    return text && normalize_(text) !== normalize_(NONE_CHOICE);
+  });
+  const wanted = parseSoftwareSelection_(answered.join(', '), softwareList);
   if (String(aiPro == null ? '' : aiPro).trim().indexOf(AI_YES) === 0) wanted.push(WORKSPACE_ACCOUNT_SOFTWARE);
   return softwareList
     .map(function (sw) { return sw.name; })
@@ -475,12 +490,17 @@ function computeStats_(rows, softwareList) {
 }
 
 /** 顯示在表單題目下方的剩餘名額說明。 */
-function buildRemainingText_(stats, updatedAt) {
+/**
+ * 下拉選單下方的剩餘名額說明。exclude：不列出的軟體 (例如不在這份選單裡的 TeacherSay、Google AI Pro)。
+ */
+function buildRemainingText_(stats, updatedAt, exclude) {
+  const skip = exclude || [];
   const lines = [
-    '每人每項限登記 1 個，依登記先後排序；額滿後仍可登記，將列為備取。',
+    '除 TeacherSay 外只能再選一項，可選「' + NONE_CHOICE + '」。依登記先後排序；額滿後仍可登記，將列為備取。',
     '目前剩餘名額' + (updatedAt ? '（' + updatedAt + ' 更新）' : '') + '：'
   ];
   stats.forEach(function (stat) {
+    if (skip.indexOf(stat.name) >= 0) return;
     let line = '・' + stat.name + '：';
     if (!isFinite(stat.quota)) {
       line += '不限名額' + (stat.name === REQUIRED_SOFTWARE ? '（每位申請者必選）' : '');
@@ -595,10 +615,35 @@ function readRegistrations_(sheet) {
   });
 }
 
-function appendRegistrations_(sheet, sub, softwareNames) {
+/**
+ * 每人除 TeacherSay 外限一項：同一帳號已登記 (或同一筆回應同時勾了) 其他軟體時，
+ * 在新登記的備註提醒管理者。不改變排序，由管理者決定是否取消。
+ * @returns {Object<string, string>} 軟體名稱 → 備註
+ */
+function otherSoftwareNotes_(rows, sub, toAdd) {
+  const email = normalize_(sub.email);
+  const held = [];
+  rows.forEach(function (row) {
+    if (normalize_(row.email) !== email || row.status === STATUS.CANCEL || row.software === REQUIRED_SOFTWARE) return;
+    if (held.indexOf(row.software) < 0) held.push(row.software);
+  });
+  const notes = {};
+  toAdd.forEach(function (software) {
+    if (software === REQUIRED_SOFTWARE) return;
+    const others = held.filter(function (name) { return name !== software; });
+    if (others.length > 0) {
+      notes[software] = '此帳號另登記了：' + others.join('、') + '（每人除 TeacherSay 外限一項，請確認）';
+    }
+    if (held.indexOf(software) < 0) held.push(software);
+  });
+  return notes;
+}
+
+function appendRegistrations_(sheet, sub, softwareNames, extraNotes) {
+  const extra = extraNotes || {};
   const values = softwareNames.map(function (software) {
-    return [sub.time, sub.name, sub.email, sub.identity, software, '', '', false, '', '',
-      registrationNote_(sub, software), sub.workspace];
+    const note = [registrationNote_(sub, software), extra[software] || ''].filter(function (text) { return text; }).join('；');
+    return [sub.time, sub.name, sub.email, sub.identity, software, '', '', false, '', '', note, sub.workspace];
   });
   const startRow = sheet.getLastRow() + 1;
   sheet.getRange(startRow, 1, values.length, REG_HEADERS.length).setValues(values);
