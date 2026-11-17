@@ -1,5 +1,5 @@
 // 教學軟體授權登記與分配系統
-// 版本 v3.3
+// 版本 v3.4
 // 更新：表單送出改為「登記」，依登記先後排定正取／備取，不再自動發放序號。
 //       管理者在「申請登記」分頁勾選核准後，再由 allocate.gs 從「序號列表」發放並寄信通知。
 // v3.1：改用 setupForm() 建立的新表單 (舊表單的回應一律忽略，避免重複紀錄)；
@@ -10,6 +10,8 @@
 // v3.3：每次填表最多 2 項：TeacherSay (必選) ＋ 另選 1 項。其他軟體改為下拉選單 (單選)，
 //       Google AI Pro 併入學年／科任的下拉選單 (選它才進入學校帳號頁)；行政另有一份不含 Google AI Pro 的下拉選單。
 //       同一帳號另登記了其他軟體時，在「申請登記」備註提醒管理者。
+// v3.4：同一帳號重新填表以最後一次為準：先前登記、這次沒選的軟體自動取消 (已核准者只在備註提醒，已發放者不動)，
+//       回條列出已取消的軟體；補登依序重跑時結果相同。
 //
 // 檔案分工：
 //   code.gs             設定、表單送出登記、正取／備取排序、統計
@@ -144,7 +146,7 @@ function onFormSubmit(e) {
         MailApp.sendEmail(withCc_({
           to: sub.email,
           subject: "【已登記】教學軟體授權申請",
-          htmlBody: buildReceiptHtml_(sub, outcomes)
+          htmlBody: buildReceiptHtml_(sub, outcomes, result)
         }, sub.email, sub.workspace));
         Logger.log("登記回條已寄出：" + sub.email);
       } catch (mailError) {
@@ -175,18 +177,57 @@ function onFormSubmit(e) {
 
 /**
  * 將一筆申請寫入「申請登記」並重新排定正取／備取。
- * @returns {{rows: Object[], added: string[], duplicates: string[]}}
+ * 同一帳號重新填表以最後一次為準：先前登記、這次沒選的軟體會取消 (見 planReplacement_)。
+ * @returns {{rows: Object[], added: string[], duplicates: string[], canceled: string[], flagged: string[]}}
  */
 function processSubmission_(ss, sub, softwareList) {
   const sheet = getRegSheet_(ss);
   let rows = readRegistrations_(sheet);
   const split = splitSelections_(rows, sub);
+  const replaced = applyReplacement_(sheet, rows, sub);
   if (split.toAdd.length > 0) {
     appendRegistrations_(sheet, sub, split.toAdd, otherSoftwareNotes_(rows, sub, split.toAdd));
     rows = readRegistrations_(sheet);
   }
   applyRanks_(sheet, rows, softwareList);
-  return { rows: rows, added: split.toAdd, duplicates: split.duplicates };
+  return {
+    rows: rows, added: split.toAdd, duplicates: split.duplicates,
+    canceled: replaced.canceled, flagged: replaced.flagged
+  };
+}
+
+/**
+ * 依 planReplacement_ 取消這次沒再選的舊登記 (或在已核准的列加註)，寫回試算表；rows 內的物件同步更新。
+ * 有取消時，這個帳號剩下的登記若已不超過一項，順便清掉過時的「此帳號另登記了」提醒。
+ * @returns {{canceled: string[], flagged: string[]}}
+ */
+function applyReplacement_(sheet, rows, sub) {
+  const plan = planReplacement_(rows, sub);
+  const result = { canceled: [], flagged: [] };
+  if (plan.cancel.length === 0 && plan.flag.length === 0) return result;
+
+  const notes = resubmitNotes_(Utilities.formatDate(new Date(timeValue_(sub.time)), 'Asia/Taipei', 'MM/dd HH:mm'));
+  plan.cancel.forEach(function (row) {
+    row.status = STATUS.CANCEL;
+    row.rank = '';
+    row.note = appendNote_(row.note, notes.cancel);
+    sheet.getRange(row.rowIndex, COL.STATUS, 1, 2).setValues([[STATUS.CANCEL, '']]);
+    sheet.getRange(row.rowIndex, COL.NOTE).setValue(row.note);
+    result.canceled.push(row.software);
+  });
+  plan.flag.forEach(function (row) {
+    row.note = appendNote_(row.note, notes.flag);
+    sheet.getRange(row.rowIndex, COL.NOTE).setValue(row.note);
+    result.flagged.push(row.software);
+  });
+
+  if (plan.cancel.length > 0) {
+    staleOtherSoftwareNotes_(rows, sub).forEach(function (row) {
+      row.note = stripOtherSoftwareNote_(row.note);
+      sheet.getRange(row.rowIndex, COL.NOTE).setValue(row.note);
+    });
+  }
+  return result;
 }
 
 /** 重新排序並寫回狀態與順位；rows 內的 status / rank 也會同步更新。 */
@@ -390,6 +431,67 @@ function splitSelections_(rows, sub) {
 }
 
 /**
+ * 同一帳號重新填表以最後一次為準。比這次送出更早的登記中，這次沒再選的軟體：
+ * - 未核准、未發放 → cancel (改為「取消」，名額釋出、備取遞補)
+ * - 已勾選核准但未發放 → flag (不動，備註請管理者確認)
+ * - 已發放、已取消、TeacherSay → 不動
+ * 只看時間早於這次送出的登記，所以補登依序重跑時，較早的回應不會取消較晚的登記。
+ * @returns {{cancel: Object[], flag: Object[]}}
+ */
+function planReplacement_(rows, sub) {
+  const email = normalize_(sub.email);
+  const subTime = timeValue_(sub.time);
+  const plan = { cancel: [], flag: [] };
+  rows.forEach(function (row) {
+    if (normalize_(row.email) !== email || timeValue_(row.time) >= subTime) return;
+    if (row.software === REQUIRED_SOFTWARE || sub.selections.indexOf(row.software) >= 0) return;
+    if (row.status === STATUS.CANCEL || row.status === STATUS.ISSUED) return;
+    (row.approved ? plan.flag : plan.cancel).push(row);
+  });
+  return plan;
+}
+
+function resubmitNotes_(whenText) {
+  return {
+    cancel: '申請人 ' + whenText + ' 重新填寫，未再選此項，已自動取消',
+    flag: '申請人 ' + whenText + ' 重新填寫時未選此項（已核准未發放），請確認是否保留'
+  };
+}
+
+/** 在備註後面加一段文字；已經有同樣的文字就不重複加 (補登重跑時)。 */
+function appendNote_(note, text) {
+  const current = String(note || '').trim();
+  if (current.indexOf(text) >= 0) return current;
+  return current ? current + '；' + text : text;
+}
+
+const OTHER_SOFTWARE_NOTE_RE = /此帳號另登記了：[^（]*（每人除 TeacherSay 外限一項，請確認）/;
+
+function stripOtherSoftwareNote_(note) {
+  return String(note || '').replace(OTHER_SOFTWARE_NOTE_RE, '').split('；')
+    .map(function (part) { return part.trim(); })
+    .filter(function (part) { return part; })
+    .join('；');
+}
+
+/**
+ * 重新填表取消舊登記後，這個帳號仍有效的登記中帶著「此帳號另登記了」提醒的列。
+ * 只有在這個帳號 (含這次選的) 除 TeacherSay 外已不超過一項時才回傳，表示提醒已過時。
+ */
+function staleOtherSoftwareNotes_(rows, sub) {
+  const email = normalize_(sub.email);
+  const mine = rows.filter(function (row) {
+    return normalize_(row.email) === email && row.status !== STATUS.CANCEL;
+  });
+  const held = [];
+  mine.map(function (row) { return row.software; }).concat(sub.selections).forEach(function (software) {
+    if (software !== REQUIRED_SOFTWARE && held.indexOf(software) < 0) held.push(software);
+  });
+  if (held.length > 1) return [];
+  return mine.filter(function (row) { return OTHER_SOFTWARE_NOTE_RE.test(row.note); });
+}
+
+/**
  * 依登記先後排定每一列的狀態與順位。
  * - 已發放：維持不動，佔用名額。
  * - 取消：維持不動，不佔名額。
@@ -551,16 +653,25 @@ function describeOutcome_(outcome) {
   return outcome.isNew ? text : '您先前已登記過，維持原登記：' + text;
 }
 
-function buildReceiptHtml_(sub, outcomes) {
+/**
+ * @param {Object} [changes] 重新填表的結果：canceled 已取消的舊登記、flagged 已核准但這次沒選的軟體
+ */
+function buildReceiptHtml_(sub, outcomes, changes) {
   const items = outcomes.map(function (outcome) {
     return '<li><b>' + escapeHtml_(outcome.software) + '</b>：' + escapeHtml_(describeOutcome_(outcome)) + '</li>';
   }).join('');
+  const canceled = (changes && changes.canceled) || [];
+  const flagged = (changes && changes.flagged) || [];
   const needsWorkspace = !isEmail_(sub.workspace) && outcomes.some(function (outcome) {
     return outcome.software === WORKSPACE_ACCOUNT_SOFTWARE && outcome.status !== STATUS.INELIGIBLE;
   });
   return '<p>親愛的 ' + escapeHtml_(sub.name) + ' 老師，您好：</p>' +
     '<p>已收到您的教學軟體授權登記，結果如下：</p>' +
     '<ul>' + items + '</ul>' +
+    (canceled.length ? '<p>重新填寫以最後一次為準，您先前登記、這次未再選的軟體<b>已取消</b>：' +
+      escapeHtml_(canceled.join('、')) + '。</p>' : '') +
+    (flagged.length ? '<p>下列軟體資訊組已審核通過，這次您未再選，資訊組會再與您確認是否保留：' +
+      escapeHtml_(flagged.join('、')) + '。</p>' : '') +
     (needsWorkspace ? '<p>您申請了 ' + escapeHtml_(WORKSPACE_ACCOUNT_SOFTWARE) + '，但未填寫學校帳號（@' + SCHOOL_DOMAIN +
       '）。這項授權需開通在學校帳號，請洽資訊組補填。</p>' : '') +
     '<p>目前<b>尚未發放授權</b>。資訊組審核後，將另行寄信通知授權序號或開通方式。</p>' +

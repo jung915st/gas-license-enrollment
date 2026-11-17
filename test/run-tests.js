@@ -616,7 +616,7 @@ ok('responses from the old form are ignored (before and after the new form exist
 });
 
 // ============ 5. end-to-end registration ============
-ok('registration: TeacherSay + one program, ranks, waitlist, AI Pro rules, CC, second-program note, remaining seats', () => {
+ok('registration: TeacherSay + one program, ranks, waitlist, AI Pro rules, CC, remaining seats', () => {
   const { E, form, send } = readyEnv();
   for (let i = 1; i <= 5; i++) send(i, teacher(i, '一年級'), 'Kahoot 教師版');
   send(6, teacher(6, '二年級', { workspace: 't6' + SCHOOL }), AI);
@@ -624,15 +624,15 @@ ok('registration: TeacherSay + one program, ranks, waitlist, AI Pro rules, CC, s
   send(8, { name: '科任8', email: 't8@gmail.com', role: '科任', detail: '自然', workspace: 't8' + SCHOOL }, AI);
   send(9, { name: '科任9', email: 't9@gmail.com', role: '科任', detail: '社會', workspace: 't9' + SCHOOL }, AI);
   send(10, { name: '幼10', email: 't10@gmail.com', role: '行政', detail: '幼兒園' }, 'Wordwall 專業版');
-  send(11, teacher(1, '一年級', { email: 'T1@gmail.com' }), 'Padlet 學校版'); // same person again, another program
+  send(11, teacher(11, '一年級'), 'Padlet 學校版');
   send(12, teacher(12, '三年級'), ''); // TeacherSay only
   send(13, teacher(13, '四年級'), 'Kahoot 教師版'); // Kahoot is full by now
   send(14, teacher(14, '五年級'), 'HiTeach 專業版');
 
   const rows = regRows(E);
-  assert.strictEqual(rows.filter((r) => r[4] === TS).length, 13, 'one TeacherSay row per person');
+  assert.strictEqual(rows.filter((r) => r[4] === TS).length, 14, 'one TeacherSay row per person');
   assert.ok(rows.filter((r) => r[4] === TS).every((r) => r[5] === '正取'), 'TeacherSay is unlimited');
-  assert.strictEqual(rows.length, 13 + 6 + 4 + 1 + 1 + 1); // TeacherSay, Kahoot, AI Pro, Wordwall, Padlet, HiTeach
+  assert.strictEqual(rows.length, 14 + 6 + 4 + 1 + 1 + 1); // TeacherSay, Kahoot, AI Pro, Wordwall, Padlet, HiTeach
   assert.deepStrictEqual(rowOf(rows, 't5@gmail.com', 'Kahoot 教師版').slice(5, 7), ['正取', 5]);
   assert.deepStrictEqual(rowOf(rows, 't13@gmail.com', 'Kahoot 教師版').slice(5, 7), ['備取', 1]);
   assert.strictEqual(rowOf(rows, 't1@gmail.com', 'Kahoot 教師版')[3], '學年／一年級');
@@ -644,10 +644,6 @@ ok('registration: TeacherSay + one program, ranks, waitlist, AI Pro rules, CC, s
   assert.strictEqual(rowOf(rows, 't10@gmail.com', 'Wordwall 專業版')[11], '', 'no school account recorded for 行政');
   assert.deepStrictEqual([rowOf(rows, 't6@gmail.com', AI)[11], rowOf(rows, 't6@gmail.com', AI)[10]], ['t6' + SCHOOL, '']);
   assert.deepStrictEqual(rows.filter((r) => r[2] === 't12@gmail.com').map((r) => r[4]), [TS]);
-  // a second program from the same account is flagged for the admin, not refused or re-ranked
-  const padlet = rowOf(rows, 't1@gmail.com', 'Padlet 學校版');
-  assert.deepStrictEqual([padlet[5], padlet[10]], ['正取', '此帳號另登記了：Kahoot 教師版（每人除 TeacherSay 外限一項，請確認）']);
-  assert.strictEqual(rowOf(rows, 't1@gmail.com', 'Kahoot 教師版')[10], '', 'the earlier registration is left as it was');
   assert.ok(rows.every((r) => r[7] === false && r[8] === ''), 'no approval, no serial at registration');
 
   const receipts = E.mails.filter((m) => m.subject === '【已登記】教學軟體授權申請');
@@ -657,7 +653,8 @@ ok('registration: TeacherSay + one program, ranks, waitlist, AI Pro rules, CC, s
   assert.deepStrictEqual([receipts[5].to, receipts[5].cc], ['t6@gmail.com', 't6' + SCHOOL]);
   assert.ok(receipts[6].htmlBody.includes('備取（備取第 1 位）') && receipts[6].cc === 't7' + SCHOOL);
   assert.ok(!receipts[9].htmlBody.includes(AI) && receipts[9].cc === undefined, '行政 receipt has no AI Pro and no CC');
-  assert.ok(receipts[10].htmlBody.includes('您先前已登記過') && receipts[10].htmlBody.includes('<b>Padlet 學校版</b>：正取（第 1 位）'));
+  assert.ok(!receipts[10].htmlBody.includes('您先前已登記過') && receipts[10].htmlBody.includes('<b>Padlet 學校版</b>：正取（第 1 位）'));
+  assert.ok(receipts.every((m) => !m.htmlBody.includes('已取消')), 'first submissions cancel nothing');
   assert.ok(receipts[12].htmlBody.includes('<b>Kahoot 教師版</b>：備取（備取第 1 位）'));
   const adminSubjects = E.mails.filter((m) => m.to === 'lres712@mail.lres.tc.edu.tw').map((m) => m.subject);
   assert.strictEqual(adminSubjects.length, 2);
@@ -671,7 +668,92 @@ ok('registration: TeacherSay + one program, ranks, waitlist, AI Pro rules, CC, s
   assert.ok(officeHelp.includes('・Kahoot 教師版：已額滿（備取 1 人）') && !officeHelp.includes('Google AI Pro'), officeHelp);
   const stats = E.ss.getSheetByName('申請統計').getRange(1, 1, 8, 10).getValues();
   assert.deepStrictEqual(stats.find((r) => r[0] === 'Kahoot 教師版').slice(1, 8), [5, 6, 5, 1, 0, 0, 0]);
-  assert.deepStrictEqual(stats.find((r) => r[0] === TS).slice(1, 8), ['不限', 13, 13, 0, 0, 0, '不限']);
+  assert.deepStrictEqual(stats.find((r) => r[0] === TS).slice(1, 8), ['不限', 14, 14, 0, 0, 0, '不限']);
+});
+
+ok('resubmitting: the latest form counts — dropped programs cancelled, approved ones flagged, issued ones kept, backfill replays the same', () => {
+  const { E, form, sheet, send } = readyEnv();
+  const regSheet = E.ss.getSheetByName('申請登記');
+  for (let i = 1; i <= 6; i++) send(i, teacher(i, '一年級'), 'Kahoot 教師版'); // t6 is 備取 1
+  assert.deepStrictEqual(rowOf(regRows(E), 't6@gmail.com', 'Kahoot 教師版').slice(5, 7), ['備取', 1]);
+  const rowNo = (email, sw) => regRows(E).findIndex((r) => r[2] === email && r[4] === sw) + 2;
+  regSheet.getRange(rowNo('t3@gmail.com', 'Kahoot 教師版'), 8).setValue(true);     // approved, not issued yet
+  regSheet.getRange(rowNo('t4@gmail.com', 'Kahoot 教師版'), 6).setValue('已發放'); // already issued
+  const before = E.mails.length;
+
+  send(7, teacher(1, '一年級', { email: 'T1@gmail.com' }), 'Padlet 學校版'); // switches program (address case differs)
+  send(8, teacher(2, '一年級'), '');                                         // withdraws: TeacherSay only
+  send(9, teacher(3, '一年級'), 'Wordwall 專業版');                          // approved Kahoot is not touched
+  send(10, teacher(4, '一年級'), '');                                        // issued Kahoot is not touched
+  send(11, teacher(5, '一年級'), 'Kahoot 教師版');                           // same choice again: nothing changes
+
+  let rows = regRows(E);
+  const of = (email, sw) => rowOf(rows, email, sw);
+  assert.deepStrictEqual(of('t1@gmail.com', 'Kahoot 教師版').slice(5, 7), ['取消', '']);
+  assert.ok(of('t1@gmail.com', 'Kahoot 教師版')[10].includes('重新填寫，未再選此項，已自動取消'));
+  assert.deepStrictEqual([of('t1@gmail.com', 'Padlet 學校版')[5], of('t1@gmail.com', 'Padlet 學校版')[10]], ['正取', ''],
+    'no second-program note once the old program is cancelled');
+  assert.deepStrictEqual(of('t2@gmail.com', 'Kahoot 教師版')[5], '取消');
+  assert.deepStrictEqual(of('t3@gmail.com', 'Kahoot 教師版').slice(5, 8), ['正取', 1, true]);
+  assert.ok(of('t3@gmail.com', 'Kahoot 教師版')[10].includes('重新填寫時未選此項（已核准未發放），請確認是否保留'));
+  assert.strictEqual(of('t3@gmail.com', 'Wordwall 專業版')[10], '此帳號另登記了：Kahoot 教師版（每人除 TeacherSay 外限一項，請確認）');
+  assert.deepStrictEqual([of('t4@gmail.com', 'Kahoot 教師版')[5], of('t4@gmail.com', 'Kahoot 教師版')[10]], ['已發放', '']);
+  assert.deepStrictEqual([of('t5@gmail.com', 'Kahoot 教師版').slice(5, 7), of('t5@gmail.com', 'Kahoot 教師版')[10]], [['正取', 2], '']);
+  assert.deepStrictEqual(of('t6@gmail.com', 'Kahoot 教師版').slice(5, 7), ['正取', 3], 'the waitlist moves up');
+  assert.ok(rows.filter((r) => r[4] === TS).every((r) => r[5] === '正取'), 'TeacherSay is never cancelled');
+  assert.strictEqual(rows.filter((r) => r[4] === TS).length, 6, 'no second TeacherSay row');
+
+  const receipts = E.mails.slice(before).filter((m) => m.subject === '【已登記】教學軟體授權申請');
+  assert.strictEqual(receipts.length, 5);
+  assert.ok(receipts[0].htmlBody.includes('<b>已取消</b>：Kahoot 教師版') && receipts[0].htmlBody.includes('<b>Padlet 學校版</b>：正取'));
+  assert.ok(receipts[1].htmlBody.includes('<b>已取消</b>：Kahoot 教師版'));
+  assert.ok(receipts[2].htmlBody.includes('資訊組會再與您確認是否保留：Kahoot 教師版') && !receipts[2].htmlBody.includes('已取消'));
+  assert.ok(!receipts[3].htmlBody.includes('已取消') && !receipts[3].htmlBody.includes('確認是否保留'));
+  assert.ok(receipts[4].htmlBody.includes('您先前已登記過') && !receipts[4].htmlBody.includes('已取消'));
+  assert.ok(item(form, Q.pick).help.includes('・Kahoot 教師版：剩餘 1／5'), item(form, Q.pick).help);
+
+  // a v3.2 response with four programs ticked, then the same person refills with one
+  submitTo(E, sheet, {
+    [Q.name]: '盧', [Q.email]: 'lu@gmail.com', [Q.role]: '科任', [Q.subject]: '英語', [Q.teacherSay]: TS,
+    [Q.software]: 'Wayground (Quizizz), Padlet 學校版, Wordwall 專業版, HiTeach 專業版', [Q.aiPro]: '是', [Q.workspace]: 'lu' + SCHOOL,
+  }, t(20));
+  const lu = () => Object.fromEntries(regRows(E).filter((r) => r[2] === 'lu@gmail.com').map((r) => [r[4], r[5]]));
+  assert.strictEqual(Object.keys(lu()).length, 6);
+  assert.ok(rowOf(regRows(E), 'lu@gmail.com', 'Wordwall 專業版')[10].startsWith('此帳號另登記了'));
+  send(21, { name: '盧', email: 'lu@gmail.com', role: '科任', detail: '英語' }, 'Wordwall 專業版');
+  assert.deepStrictEqual(lu(), {
+    [TS]: '正取', 'Wayground (Quizizz)': '取消', 'Padlet 學校版': '取消', 'Wordwall 專業版': '正取', 'HiTeach 專業版': '取消', [AI]: '取消',
+  });
+  assert.strictEqual(rowOf(regRows(E), 'lu@gmail.com', 'Wordwall 專業版')[10], '', 'the stale second-program note is cleared');
+  const luReceipt = E.mails.filter((m) => m.to === 'lu@gmail.com').pop().htmlBody;
+  assert.ok(luReceipt.includes('<b>已取消</b>：') && ['Wayground (Quizizz)', 'Padlet 學校版', 'HiTeach 專業版', AI].every((x) => luReceipt.includes(x)));
+
+  // backfill replays every response in order and lands on the same sheet, sending nothing
+  const snapshot = JSON.stringify(regRows(E));
+  const mails = E.mails.length;
+  E.call('menuBackfill()');
+  assert.strictEqual(JSON.stringify(regRows(E)), snapshot);
+  assert.strictEqual(E.mails.length, mails);
+  assert.ok(E.alerts[E.alerts.length - 1].includes('新增 0 筆登記') && !E.alerts[E.alerts.length - 1].includes('取消'));
+});
+
+ok('a refill that came in before this version is applied by backfill', () => {
+  const { E, sheet } = readyEnv();
+  const a1 = answersOf(teacher(1, '一年級'), 'Kahoot 教師版');
+  const a2 = answersOf(teacher(1, '一年級'), 'HiTeach 專業版');
+  // both responses are on the tab but neither was registered (e.g. the trigger failed)
+  [[a1, t(1)], [a2, t(5)]].forEach(([a, when]) => {
+    Object.keys(a).forEach((key) => {
+      const cur = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      if (cur.indexOf(key) < 0) sheet.set(1, cur.length + 1, key);
+    });
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    sheet.appendRow(headers.map((h) => (h === '時間戳記' ? when : (a[h] === undefined ? '' : a[h]))));
+  });
+  E.call('menuBackfill()');
+  const rows = regRows(E);
+  assert.deepStrictEqual(rows.map((r) => [r[4], r[5]]), [[TS, '正取'], ['Kahoot 教師版', '取消'], ['HiTeach 專業版', '正取']]);
+  assert.ok(E.alerts[E.alerts.length - 1].includes('新增 3 筆登記；依重新填寫（以最後一次為準）取消 1 筆舊登記'), E.alerts[E.alerts.length - 1]);
 });
 
 // ============ 6. approval + issuing ============

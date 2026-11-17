@@ -118,9 +118,9 @@ function menuBackfill() {
   if (!confirm_('從表單回應補登', '將把表單回應中尚未登記的申請補進「申請登記」(不會寄送回條)。要繼續嗎？')) return;
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
-  let added;
+  let result;
   try {
-    added = backfillFromResponses_(ss);
+    result = backfillFromResponses_(ss);
   } catch (error) {
     notify_(String(error.message || error));
     return;
@@ -128,7 +128,8 @@ function menuBackfill() {
     lock.releaseLock();
   }
   recalcAll_(ss);
-  notify_('補登完成，新增 ' + added + ' 筆登記。');
+  notify_('補登完成，新增 ' + result.added + ' 筆登記' +
+    (result.canceled ? '；依重新填寫（以最後一次為準）取消 ' + result.canceled + ' 筆舊登記' : '') + '。');
 }
 
 // =====================================================================
@@ -397,19 +398,21 @@ function syncAccountSheet_(ss, row) {
  * 把授權申請表單的回應分頁中、尚未登記的申請補進「申請登記」。
  * 只讀 setupForm() 所建立表單的回應分頁，舊表單的回應不會被匯入。
  * 同一帳號＋軟體不會重複登記，可重複執行；不寄送回條。
- * @returns {number} 新增的登記筆數
+ * 同一帳號重新填表以最後一次為準，依時間順序重跑時結果相同。
+ * @returns {{added: number, canceled: number}} 新增的登記筆數、因重新填寫而取消的舊登記筆數
  */
 function backfillFromResponses_(ss) {
   const responseSheet = getResponseSheet_(ss);
   if (!responseSheet) {
     throw new Error('找不到授權申請表單的回應分頁，請先執行選單「初次設定 → 2. 建立新申請表單（已建立則更新）」。');
   }
-  if (responseSheet.getLastRow() < 2) return 0;
+  if (responseSheet.getLastRow() < 2) return { added: 0, canceled: 0 };
 
   const softwareList = getSoftwareList_(ss);
   const values = responseSheet.getRange(1, 1, responseSheet.getLastRow(), responseSheet.getLastColumn()).getValues();
   const headers = values[0];
   let added = 0;
+  let canceled = 0;
 
   for (let r = 1; r < values.length; r++) {
     const time = values[r][0];
@@ -426,9 +429,11 @@ function backfillFromResponses_(ss) {
       continue;
     }
     if (sub.selections.length === 0) continue;
-    added += processSubmission_(ss, sub, softwareList).added.length;
+    const result = processSubmission_(ss, sub, softwareList);
+    added += result.added.length;
+    canceled += result.canceled.length;
   }
-  return added;
+  return { added: added, canceled: canceled };
 }
 
 // =====================================================================

@@ -227,6 +227,45 @@ function runEnrollmentTests() {
   check('補登不會救回已取消的同一筆回應',
     splitSelections_(existing, { email: 'gone@x.tw', time: at(2), selections: ['Kahoot 教師版'] }).toAdd, []);
 
+  // --- 重新填表以最後一次為準 ---
+  const mine = [
+    reg(1, 'R@x.tw', '一年級', 'TeacherSay 專業版', { status: STATUS.OK }),
+    reg(1, 'r@x.tw', '一年級', 'Kahoot 教師版', { status: STATUS.OK }),
+    reg(1, 'r@x.tw', '一年級', 'Padlet 學校版', { status: STATUS.WAIT }),
+    reg(2, 'r@x.tw', '一年級', 'HiTeach 專業版', { status: STATUS.OK, approved: true }),
+    reg(2, 'r@x.tw', '一年級', 'Wordwall 專業版', { status: STATUS.ISSUED }),
+    reg(2, 'r@x.tw', '一年級', 'Wayground (Quizizz)', { status: STATUS.CANCEL }),
+    reg(9, 'r@x.tw', '一年級', 'Google AI Pro 教育版', { status: STATUS.OK }),
+    reg(1, 'other@x.tw', '一年級', 'Kahoot 教師版', { status: STATUS.OK })
+  ];
+  const software = function (list) { return list.map(function (row) { return row.software; }); };
+  const replan = planReplacement_(mine, { email: 'r@x.tw', time: at(5), selections: ['TeacherSay 專業版', 'Kahoot 教師版'] });
+  check('重新填表：沒再選的取消、已核准只提醒；已發放、已取消、較晚的登記與別人不動',
+    [software(replan.cancel), software(replan.flag)], [['Padlet 學校版'], ['HiTeach 專業版']]);
+  check('重新填表：沒有 TeacherSay 的舊回應也不會取消 TeacherSay',
+    software(planReplacement_(mine, { email: 'r@x.tw', time: at(5), selections: ['Kahoot 教師版'] }).cancel), ['Padlet 學校版']);
+  check('重新填表：同一筆回應 (時間相同) 不取消任何登記',
+    planReplacement_(mine, { email: 'r@x.tw', time: at(1), selections: ['TeacherSay 專業版'] }).cancel.length, 0);
+  check('備註：附加在後面、同樣的文字不重複', [appendNote_('', 'A'), appendNote_('X', 'A'), appendNote_('X；A', 'A')], ['A', 'X；A', 'X；A']);
+  const staleNote = '學校帳號非 @mail.lres.tc.edu.tw；此帳號另登記了：Wayground (Quizizz)、Padlet 學校版（每人除 TeacherSay 外限一項，請確認）';
+  check('過時的「另登記了」提醒只拿掉那一段', stripOtherSoftwareNote_(staleNote), '學校帳號非 @mail.lres.tc.edu.tw');
+  const flaggedRows = [
+    reg(1, 's@x.tw', '一年級', 'HiTeach 專業版', { status: STATUS.OK, approved: true }),
+    reg(1, 's@x.tw', '一年級', 'Padlet 學校版', { status: STATUS.CANCEL, note: staleNote }),
+    reg(1, 's@x.tw', '一年級', 'Kahoot 教師版', { status: STATUS.OK, note: '此帳號另登記了：HiTeach 專業版（每人除 TeacherSay 外限一項，請確認）' })
+  ];
+  check('仍持有兩項 (已核准的沒取消) 時保留「另登記了」提醒',
+    staleOtherSoftwareNotes_(flaggedRows, { email: 's@x.tw', selections: ['TeacherSay 專業版', 'Kahoot 教師版'] }).length, 0);
+  check('只剩一項時，有效登記上的「另登記了」提醒視為過時 (已取消的列不動)',
+    software(staleOtherSoftwareNotes_(flaggedRows.slice(1), { email: 's@x.tw', selections: ['TeacherSay 專業版', 'Kahoot 教師版'] })),
+    ['Kahoot 教師版']);
+  const changedHtml = buildReceiptHtml_({ name: '王', workspace: '' }, [{ software: 'Kahoot 教師版', status: STATUS.OK, rank: 1, isNew: false }],
+    { canceled: ['Padlet 學校版', 'HiTeach 專業版'], flagged: ['Wordwall 專業版'] });
+  check('回條：列出已取消與待確認的軟體',
+    [changedHtml.indexOf('<b>已取消</b>：Padlet 學校版、HiTeach 專業版') >= 0, changedHtml.indexOf('確認是否保留：Wordwall 專業版') >= 0], [true, true]);
+  check('回條：沒有變更時不出現取消段落',
+    buildReceiptHtml_({ name: '王', workspace: '' }, [{ software: 'Kahoot 教師版', status: STATUS.OK, rank: 1, isNew: true }]).indexOf('已取消'), -1);
+
   // --- 發放計畫 ---
   const serials = [
     { rowIndex: 2, serial: 'OLD-1', email: 'used@x.tw', software: '' },
