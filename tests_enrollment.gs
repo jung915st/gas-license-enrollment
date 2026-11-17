@@ -38,7 +38,7 @@ function runEnrollmentTests() {
   // --- 軟體清單 ---
   check('預設軟體清單共 7 套，TeacherSay 在第一列', [softwareList.length, softwareList[0].name], [7, 'TeacherSay 專業版']);
   check('預設可用授權數 (TeacherSay 不限)', softwareList.map(function (sw) { return quotaText_(sw.quota); }),
-    ['不限', 5, 5, 10, 10, 15, 7]);
+    ['不限', 5, 5, 10, 9, 15, 7]);
   check('可用授權數「不限」的寫法', parseSoftwareRows_([['A', '不限', '', ''], ['B', ' 無限 ', '', ''], ['C', 'Unlimited', '', ''], ['D', '', '', '']])
     .map(function (sw) { return isFinite(sw.quota) ? sw.quota : 'inf'; }), ['inf', 'inf', 'inf', 0]);
   check('只有 Google AI Pro 有每組限一位', softwareList.filter(function (sw) { return sw.limited; })

@@ -73,7 +73,7 @@ const DEFAULT_SOFTWARE = [
   ['Wayground (Quizizz)', 5, MODE.ACCOUNT, ''],
   ['Kahoot 教師版', 5, MODE.ACCOUNT, ''],
   ['Padlet 學校版', 10, MODE.ACCOUNT, ''],
-  ['Wordwall 專業版', 10, MODE.ACCOUNT, ''],
+  ['Wordwall 專業版', 9, MODE.ACCOUNT, ''],
   ['HiTeach 專業版', 15, MODE.SERIAL, ''],
   ['Google AI Pro 教育版', 7, MODE.ACCOUNT, LIMIT_PER_GROUP_TEXT]
 ];
