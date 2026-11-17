@@ -402,6 +402,7 @@ ok('setupForm creates a NEW form: TeacherSay gate, role branches, one-pick dropd
   assert.deepStrictEqual(titlesOf(form), FORM_LAYOUT);
   assert.ok(form.description.includes('每次填表最多申請 2 項軟體：已預設申請 TeacherSay 專業版，只能再選填 1 項'));
   assert.ok(form.description.includes('本次軟體使用申請需協助提交使用成果，同時配合取得並使用TeacherSay。'));
+  assert.ok(form.description.includes('要更改申請的軟體，請用同一個 Google 帳號重新填寫，以最後一次為準'), form.description);
   assertJumps(form);
   assert.deepStrictEqual(item(form, Q.office).choices, ['教務處', '學務處', '總務處', '輔導室', '幼兒園']);
   assert.ok(pageOf(form, '【行政】').help.includes('由資訊組另行分配'));
@@ -649,6 +650,7 @@ ok('registration: TeacherSay + one program, ranks, waitlist, AI Pro rules, CC, r
   const receipts = E.mails.filter((m) => m.subject === '【已登記】教學軟體授權申請');
   assert.strictEqual(receipts.length, 14);
   assert.ok(receipts.every((m) => m.htmlBody.includes('<b>TeacherSay 專業版</b>')));
+  assert.ok(receipts.every((m) => m.htmlBody.includes('請用同一個 Google 帳號重新填寫，以最後一次為準')), 'every receipt explains how to change');
   assert.deepStrictEqual([receipts[0].to, receipts[0].cc], ['t1@gmail.com', undefined]);
   assert.deepStrictEqual([receipts[5].to, receipts[5].cc], ['t6@gmail.com', 't6' + SCHOOL]);
   assert.ok(receipts[6].htmlBody.includes('備取（備取第 1 位）') && receipts[6].cc === 't7' + SCHOOL);

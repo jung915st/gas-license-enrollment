@@ -263,6 +263,7 @@ function runEnrollmentTests() {
     { canceled: ['Padlet 學校版', 'HiTeach 專業版'], flagged: ['Wordwall 專業版'] });
   check('回條：列出已取消與待確認的軟體',
     [changedHtml.indexOf('<b>已取消</b>：Padlet 學校版、HiTeach 專業版') >= 0, changedHtml.indexOf('確認是否保留：Wordwall 專業版') >= 0], [true, true]);
+  check('回條：說明重新填寫以最後一次為準', changedHtml.indexOf(RESUBMIT_RULE_TEXT) >= 0, true);
   check('回條：沒有變更時不出現取消段落',
     buildReceiptHtml_({ name: '王', workspace: '' }, [{ software: 'Kahoot 教師版', status: STATUS.OK, rank: 1, isNew: true }]).indexOf('已取消'), -1);
 

@@ -31,6 +31,7 @@ const FORM_DESCRIPTION =
   '每次填表最多申請 2 項軟體：已預設申請 TeacherSay 專業版，只能再選填 1 項（也可以不選）。\n' +
   TEACHERSAY_NOTICE + '\n' +
   '系統依登記先後排序，名額內為正取，額滿後登記為備取。\n' +
+  RESUBMIT_RULE_TEXT + '\n' +
   '登記不代表已取得授權：資訊組審核後，會寄信到您填寫的 Google 帳號，通知授權序號或開通方式。\n' +
   'Google AI Pro 教育版限' + LIMIT_PER_GROUP_TEXT + '可申請（算在另選的 1 項內），並須填寫學校帳號（@' + SCHOOL_DOMAIN + '）；' +
   '行政人員的 Google AI Pro 由資訊組另行分配。';
