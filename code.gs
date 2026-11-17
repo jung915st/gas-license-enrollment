@@ -658,7 +658,8 @@ function describeOutcome_(outcome) {
 }
 
 /**
- * @param {Object} [changes] 重新填表的結果：canceled 已取消的舊登記、flagged 已核准但這次沒選的軟體
+ * @param {Object} [changes] 重新填表的結果：canceled 已取消的舊登記、flagged 已核准但這次沒選的軟體；
+ *   resentFor 補寄回條時填申請時間 (文字)
  */
 function buildReceiptHtml_(sub, outcomes, changes) {
   const items = outcomes.map(function (outcome) {
@@ -666,11 +667,13 @@ function buildReceiptHtml_(sub, outcomes, changes) {
   }).join('');
   const canceled = (changes && changes.canceled) || [];
   const flagged = (changes && changes.flagged) || [];
+  const resentFor = (changes && changes.resentFor) || '';
   const needsWorkspace = !isEmail_(sub.workspace) && outcomes.some(function (outcome) {
     return outcome.software === WORKSPACE_ACCOUNT_SOFTWARE && outcome.status !== STATUS.INELIGIBLE;
   });
   return '<p>親愛的 ' + escapeHtml_(sub.name) + ' 老師，您好：</p>' +
-    '<p>已收到您的教學軟體授權登記，結果如下：</p>' +
+    (resentFor ? '<p>此為補寄的登記回條：您於 ' + escapeHtml_(resentFor) + ' 送出的申請，目前登記結果如下：</p>'
+      : '<p>已收到您的教學軟體授權登記，結果如下：</p>') +
     '<ul>' + items + '</ul>' +
     (canceled.length ? '<p>重新填寫以最後一次為準，您先前登記、這次未再選的軟體<b>已取消</b>：' +
       escapeHtml_(canceled.join('、')) + '。</p>' : '') +
@@ -682,6 +685,39 @@ function buildReceiptHtml_(sub, outcomes, changes) {
     '<p>' + escapeHtml_(RESUBMIT_RULE_TEXT) + '</p>' +
     '<br><p>' + SCHOOL_SIGNATURE + '</p>' +
     '<p style="color: grey; font-size: 12px;">此為系統自動發送信件，請勿直接回覆。</p>';
+}
+
+/**
+ * 補寄登記回條：依 Google 帳號 (不分大小寫) 找出每人目前有效 (未取消) 的登記，
+ * 依軟體清單順序排列，組成與送出表單時相同格式的回條內容。
+ * @returns {{send: {sub: Object, outcomes: Object[], since: Date}[], missing: string[]}}
+ */
+function buildResendPlan_(rows, emails, softwareList) {
+  const order = softwareList.map(function (sw) { return sw.name; });
+  const position = function (row) { const i = order.indexOf(row.software); return i < 0 ? order.length : i; };
+  const plan = { send: [], missing: [] };
+  const seen = {};
+  emails.forEach(function (raw) {
+    const email = normalize_(raw);
+    if (!email || seen[email]) return;
+    seen[email] = true;
+    const mine = rows.filter(function (row) { return normalize_(row.email) === email && row.status !== STATUS.CANCEL; });
+    if (mine.length === 0) {
+      plan.missing.push(String(raw).trim());
+      return;
+    }
+    mine.sort(function (a, b) { return position(a) - position(b); });
+    const withWorkspace = mine.filter(function (row) { return isEmail_(row.workspace); })[0];
+    const since = mine.map(function (row) { return timeValue_(row.time); })
+      .filter(function (value) { return value > 0; })
+      .sort(function (a, b) { return a - b; })[0];
+    plan.send.push({
+      sub: { name: mine[0].name, email: mine[0].email, workspace: withWorkspace ? withWorkspace.workspace : '' },
+      outcomes: mine.map(function (row) { return { software: row.software, status: row.status, rank: row.rank, isNew: true }; }),
+      since: since ? new Date(since) : null
+    });
+  });
+  return plan;
 }
 
 // =====================================================================

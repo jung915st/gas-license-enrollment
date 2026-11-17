@@ -23,6 +23,7 @@ function onOpen() {
     .addItem('發放已核准授權（寄信通知）', 'menuIssueApproved')
     .addSeparator()
     .addItem('從表單回應補登（漏登時使用）', 'menuBackfill')
+    .addItem('補寄登記回條（輸入 Google 帳號）', 'menuResendReceipts')
     .addSeparator()
     .addSubMenu(SpreadsheetApp.getUi().createMenu('初次設定')
       .addItem('1. 初始化分頁', 'setupSheets')
@@ -130,6 +131,63 @@ function menuBackfill() {
   recalcAll_(ss);
   notify_('補登完成，新增 ' + result.added + ' 筆登記' +
     (result.canceled ? '；依重新填寫（以最後一次為準）取消 ' + result.canceled + ' 筆舊登記' : '') + '。');
+}
+
+/**
+ * 補寄登記回條 (例如補登後，或申請人沒收到)：輸入 Google 帳號，依目前「申請登記」的有效登記，
+ * 寄出與送出表單時相同格式的「已登記」回條，有學校帳號時副本給學校帳號。寄出前會列出收件人確認。
+ */
+function menuResendReceipts() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let input;
+  try {
+    const ui = SpreadsheetApp.getUi();
+    const answer = ui.prompt('補寄登記回條', '請輸入要補寄的 Google 帳號（多個以逗號、空白或換行分隔）：', ui.ButtonSet.OK_CANCEL);
+    if (answer.getSelectedButton() !== ui.Button.OK) return;
+    input = answer.getResponseText();
+  } catch (error) {
+    Logger.log('此功能需要從試算表選單「授權管理」執行。');
+    return;
+  }
+  const emails = String(input || '').split(/[\s,，;；]+/).filter(function (text) { return text; });
+  const plan = buildResendPlan_(readRegistrations_(getRegSheet_(ss)), emails, getSoftwareList_(ss));
+  const missingText = plan.missing.length ? '\n\n「申請登記」找不到有效登記，不寄：' + plan.missing.join('、') : '';
+  if (plan.send.length === 0) {
+    notify_('沒有可補寄的回條。' + missingText);
+    return;
+  }
+  const lines = plan.send.map(function (item) {
+    const cc = ccFor_(item.sub.email, item.sub.workspace);
+    return '・' + item.sub.name + '（' + item.sub.email + (cc ? '，副本 ' + cc : '') + '）：' +
+      item.outcomes.map(function (outcome) { return outcome.software; }).join('、');
+  });
+  const addresses = plan.send.reduce(function (sum, item) {
+    return sum + 1 + (ccFor_(item.sub.email, item.sub.workspace) ? 1 : 0);
+  }, 0);
+  const quota = MailApp.getRemainingDailyQuota();
+  if (addresses > quota) {
+    notify_('今日剩餘寄信額度為 ' + quota + ' 個收件人，不足以補寄（共 ' + addresses + ' 個收件人）。請明天再寄。');
+    return;
+  }
+  if (!confirm_('補寄登記回條', '將寄出 ' + plan.send.length + ' 封「已登記」回條：\n' + lines.join('\n') + missingText + '\n\n要寄出嗎？')) return;
+
+  const sent = [];
+  const failed = [];
+  plan.send.forEach(function (item) {
+    try {
+      MailApp.sendEmail(withCc_({
+        to: item.sub.email,
+        subject: '【已登記】教學軟體授權申請',
+        htmlBody: buildReceiptHtml_(item.sub, item.outcomes,
+          { resentFor: item.since ? Utilities.formatDate(item.since, 'Asia/Taipei', 'MM/dd HH:mm') : '' })
+      }, item.sub.email, item.sub.workspace));
+      sent.push(item.sub.name);
+    } catch (error) {
+      failed.push(item.sub.name + '（' + error + '）');
+    }
+  });
+  notify_('已補寄 ' + sent.length + ' 封回條' + (sent.length ? '：' + sent.join('、') : '') + '。' +
+    (failed.length ? '\n寄送失敗：' + failed.join('、') : '') + missingText);
 }
 
 // =====================================================================

@@ -264,6 +264,25 @@ function runEnrollmentTests() {
   check('回條：列出已取消與待確認的軟體',
     [changedHtml.indexOf('<b>已取消</b>：Padlet 學校版、HiTeach 專業版') >= 0, changedHtml.indexOf('確認是否保留：Wordwall 專業版') >= 0], [true, true]);
   check('回條：說明重新填寫以最後一次為準', changedHtml.indexOf(RESUBMIT_RULE_TEXT) >= 0, true);
+  // --- 補寄登記回條 ---
+  const resendRows = [
+    reg(3, 'Q@x.tw', '科任', 'Kahoot 教師版', { status: STATUS.OK, rank: 2 }),
+    reg(3, 'q@x.tw', '科任', 'TeacherSay 專業版', { status: STATUS.OK, rank: 1 }),
+    reg(3, 'q@x.tw', '科任', 'Padlet 學校版', { status: STATUS.CANCEL }),
+    reg(4, 'q@x.tw', '科任', 'Google AI Pro 教育版', { status: STATUS.WAIT, rank: 1, workspace: 'q@mail.lres.tc.edu.tw' }),
+    reg(5, 'other@x.tw', '科任', 'Kahoot 教師版', { status: STATUS.OK, rank: 3 })
+  ];
+  const resend = buildResendPlan_(resendRows, ['q@x.tw', 'Q@X.TW', 'none@x.tw', ''], softwareList);
+  check('補寄：同一帳號只寄一次，找不到的列出來', [resend.send.length, resend.missing], [1, ['none@x.tw']]);
+  check('補寄：只列有效登記，依軟體清單順序，帶狀態與順位',
+    resend.send[0].outcomes.map(function (o) { return o.software + o.status + o.rank; }),
+    ['TeacherSay 專業版正取1', 'Kahoot 教師版正取2', 'Google AI Pro 教育版備取1']);
+  check('補寄：收件人、學校帳號副本、最早的登記時間',
+    [normalize_(resend.send[0].sub.email), resend.send[0].sub.workspace, resend.send[0].since.getTime()], ['q@x.tw', 'q@mail.lres.tc.edu.tw', at(3).getTime()]);
+  const resendHtml = buildReceiptHtml_(resend.send[0].sub, resend.send[0].outcomes, { resentFor: '11/16 09:03' });
+  check('補寄：回條註明補寄與申請時間，結果不加「先前已登記過」',
+    [resendHtml.indexOf('此為補寄的登記回條：您於 11/16 09:03 送出的申請') >= 0, resendHtml.indexOf('您先前已登記過'), resendHtml.indexOf(RESUBMIT_RULE_TEXT) >= 0],
+    [true, -1, true]);
   check('回條：沒有變更時不出現取消段落',
     buildReceiptHtml_({ name: '王', workspace: '' }, [{ software: 'Kahoot 教師版', status: STATUS.OK, rank: 1, isNew: true }]).indexOf('已取消'), -1);
 

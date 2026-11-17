@@ -183,8 +183,13 @@ function makeEnv(opts) {
         if (opts.noUi) throw new Error('no ui');
         const menu = { addItem: () => menu, addSeparator: () => menu, addSubMenu: () => menu, addToUi: () => {} };
         return {
-          alert: (a, b, c) => { alerts.push(b === undefined ? a : a + '\n' + b); return 'YES'; },
-          ButtonSet: { YES_NO: 'YES_NO' }, Button: { YES: 'YES' }, createMenu: () => menu,
+          alert: (a, b, c) => { alerts.push(b === undefined ? a : a + '\n' + b); return env.__confirm || 'YES'; },
+          prompt: (title, message) => {
+            alerts.push(title + '\n' + message);
+            const reply = env.__prompt || { button: 'CANCEL', text: '' };
+            return { getSelectedButton: () => reply.button, getResponseText: () => reply.text };
+          },
+          ButtonSet: { YES_NO: 'YES_NO', OK_CANCEL: 'OK_CANCEL' }, Button: { YES: 'YES', OK: 'OK', CANCEL: 'CANCEL' }, createMenu: () => menu,
         };
       },
       newDataValidation: () => { const b = { requireValueInList: () => b, setAllowInvalid: () => b, build: () => ({}) }; return b; },
@@ -756,6 +761,42 @@ ok('a refill that came in before this version is applied by backfill', () => {
   const rows = regRows(E);
   assert.deepStrictEqual(rows.map((r) => [r[4], r[5]]), [[TS, '正取'], ['Kahoot 教師版', '取消'], ['HiTeach 專業版', '正取']]);
   assert.ok(E.alerts[E.alerts.length - 1].includes('新增 3 筆登記；依重新填寫（以最後一次為準）取消 1 筆舊登記'), E.alerts[E.alerts.length - 1]);
+});
+
+ok('resending receipts: same format from the current registrations, CC the school account, confirm first', () => {
+  const { E, send } = readyEnv();
+  send(1, teacher(1, '一年級', { workspace: 't1' + SCHOOL }), AI);
+  send(2, { name: '科任2', email: 't2@gmail.com', role: '科任', detail: '英語' }, 'Kahoot 教師版');
+  send(3, { name: '科任2', email: 't2@gmail.com', role: '科任', detail: '英語' }, ''); // withdrew Kahoot
+  let n = E.mails.length;
+
+  E.call('menuResendReceipts()', { __prompt: { button: 'CANCEL', text: 't1@gmail.com' } });
+  assert.strictEqual(E.mails.length, n, 'cancelled prompt sends nothing');
+  E.call('menuResendReceipts()', { __prompt: { button: 'OK', text: 't1@gmail.com' }, __confirm: 'NO' });
+  assert.strictEqual(E.mails.length, n, 'declined confirmation sends nothing');
+  E.call('menuResendReceipts()', { __prompt: { button: 'OK', text: 'nobody@x.tw' }, __confirm: 'YES' });
+  assert.strictEqual(E.mails.length, n);
+  assert.ok(E.alerts[E.alerts.length - 1].includes('沒有可補寄的回條') && E.alerts[E.alerts.length - 1].includes('nobody@x.tw'));
+
+  E.call('menuResendReceipts()', { __prompt: { button: 'OK', text: 'T1@gmail.com，t2@gmail.com\nnobody@x.tw' }, __confirm: 'YES' });
+  const confirmText = E.alerts[E.alerts.length - 2];
+  assert.ok(confirmText.includes('將寄出 2 封') && confirmText.includes('副本 t1' + SCHOOL) && confirmText.includes('不寄：nobody@x.tw'), confirmText);
+  const sent = E.mails.slice(n);
+  assert.strictEqual(sent.length, 2);
+  assert.deepStrictEqual(sent.map((m) => [m.to, m.cc, m.subject]),
+    [['t1@gmail.com', 't1' + SCHOOL, '【已登記】教學軟體授權申請'], ['t2@gmail.com', undefined, '【已登記】教學軟體授權申請']]);
+  assert.ok(sent[0].htmlBody.includes('此為補寄的登記回條') && sent[0].htmlBody.includes('<b>' + AI + '</b>：正取（第 1 位）'));
+  assert.ok(sent[0].htmlBody.includes('請用同一個 Google 帳號重新填寫，以最後一次為準'));
+  assert.ok(!sent[1].htmlBody.includes('Kahoot') && sent[1].htmlBody.includes('<b>TeacherSay 專業版</b>：正取'), 'cancelled rows are left out');
+  assert.ok(!sent.some((m) => m.htmlBody.includes('您先前已登記過')));
+  assert.ok(E.alerts[E.alerts.length - 1].includes('已補寄 2 封回條：老師1、科任2'), E.alerts[E.alerts.length - 1]);
+
+  const low = readyEnv({ mailQuota: 1 });
+  low.send(1, teacher(1, '一年級', { workspace: 't1' + SCHOOL }), AI);
+  n = low.E.mails.length;
+  low.E.call('menuResendReceipts()', { __prompt: { button: 'OK', text: 't1@gmail.com' }, __confirm: 'YES' });
+  assert.strictEqual(low.E.mails.length, n);
+  assert.ok(low.E.alerts[low.E.alerts.length - 1].includes('剩餘寄信額度為 1'));
 });
 
 // ============ 6. approval + issuing ============
