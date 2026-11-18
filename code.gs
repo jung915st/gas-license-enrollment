@@ -15,6 +15,7 @@
 // v3.5：表單第一頁加「申請項目」：教學軟體授權／平板借用。平板借用登記借用的平板車與數量 (整車或填數量)，
 //       不需 TeacherSay、沒有名額與核准，狀態為「已登記」；成果填報系統用它檢查平板借用的填報帳號。
 //       兩種登記互不取消；平板借用重新填寫也以最後一次為準。
+//       平板車與台數由「平板車清單」分頁管理 (成果填報系統也讀同一個分頁)，改了不必重新發布程式。
 //
 // 檔案分工：
 //   code.gs             設定、表單送出登記、正取／備取排序、統計
@@ -30,6 +31,7 @@ const SCHOOL_DOMAIN = "mail.lres.tc.edu.tw";       // 學校 Google Workspace �
 const SOFTWARE_SHEET_NAME = "軟體清單"; // A 軟體名稱、B 可用授權數、C 分配方式、D 申請限制
 const REG_SHEET_NAME = "申請登記";      // 一列 = 一位申請人的一套軟體
 const STATS_SHEET_NAME = "申請統計";    // 各軟體登記人數與剩餘名額 (自動產生，請勿手動編輯)
+const TABLET_SHEET_NAME = "平板車清單"; // A 代號、B 名稱、C 台數 (成果填報系統也讀這個分頁)
 
 // 表單題目名稱：由 setupForm() 建立。若在表單上改了題目名稱，這裡要同步修改 (空白與大小寫差異會自動忽略)
 const Q_NAME = '您的大名';
@@ -54,11 +56,12 @@ const Q_TABLET_CART = '借用的平板車';
 const Q_TABLET_MODE = '借用方式';
 const Q_TABLET_COUNT = '借用數量（台）';
 const TABLET_MODE = { WHOLE: '整車借用', PARTIAL: '部分借用（填寫數量）' };
-// 平板車與台數 (與成果填報系統的平板車相同)
-const TABLET_CARTS = [
-  { name: '平板車 A', max: 28 }, { name: '平板車 B', max: 28 }, { name: '平板車 C', max: 28 },
-  { name: '平板車 D', max: 28 }, { name: '平板車 E', max: 28 }, { name: '平板車 F', max: 28 },
-  { name: '平板車 G', max: 30 }, { name: '平板車 H', max: 30 }, { name: '黑車', max: 30 }, { name: '白車', max: 28 }
+// 「平板車清單」分頁不存在時建立的預設內容；代號沿用成果填報系統寫進紀錄的值
+const DEFAULT_TABLET_CARTS = [
+  { id: 'A', name: '平板車 A', max: 28 }, { id: 'B', name: '平板車 B', max: 28 }, { id: 'C', name: '平板車 C', max: 28 },
+  { id: 'D', name: '平板車 D', max: 28 }, { id: 'E', name: '平板車 E', max: 28 }, { id: 'F', name: '平板車 F', max: 28 },
+  { id: 'G', name: '平板車 G', max: 30 }, { id: 'H', name: '平板車 H', max: 30 },
+  { id: 'Black', name: '黑車', max: 30 }, { id: 'White', name: '白車', max: 28 }
 ];
 
 const Q_SOFTWARE = '您要申請的軟體授權';            // 舊：其他軟體核取方塊 (可複選)
@@ -148,7 +151,7 @@ function onFormSubmit(e) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const softwareList = getSoftwareList_(ss);
-    const sub = parseSubmission_(e.namedValues, softwareList, submissionTime_(e));
+    const sub = parseSubmission_(e.namedValues, softwareList, submissionTime_(e), getTabletCarts_(ss));
 
     if (sub.selections.length === 0) {
       Logger.log("此筆回應沒有勾選任何清單內的軟體，不登記。");
@@ -343,11 +346,13 @@ function parseSoftwareSelection_(answer, softwareList) {
     .map(function (sw) { return sw.name; });
 }
 
-function parseSubmission_(namedValues, softwareList, time) {
+function parseSubmission_(namedValues, softwareList, time, carts) {
   const name = answerOf_(namedValues, Q_NAME);
   const email = answerOf_(namedValues, Q_EMAIL);
   const kind = answerOf_(namedValues, Q_KIND);
-  if (kind !== null && String(kind).indexOf(KIND.TABLET) >= 0) return parseTabletSubmission_(namedValues, name, email, time);
+  if (kind !== null && String(kind).indexOf(KIND.TABLET) >= 0) {
+    return parseTabletSubmission_(namedValues, name, email, time, carts || DEFAULT_TABLET_CARTS);
+  }
   const role = answerOf_(namedValues, Q_ROLE);
   const teacherSay = answerOf_(namedValues, Q_TEACHERSAY);
   const pick = answerOf_(namedValues, Q_PICK);
@@ -382,7 +387,7 @@ function parseSubmission_(namedValues, softwareList, time) {
 /**
  * 平板借用：平板車、借用方式與數量。整車借用＝該車台數；填的數量超過該車台數時以整車計並加註。
  */
-function parseTabletSubmission_(namedValues, name, email, time) {
+function parseTabletSubmission_(namedValues, name, email, time, carts) {
   const cartText = answerOf_(namedValues, Q_TABLET_CART);
   const mode = answerOf_(namedValues, Q_TABLET_MODE);
   const missing = [];
@@ -394,7 +399,7 @@ function parseTabletSubmission_(namedValues, name, email, time) {
     throw new Error('表單找不到題目：「' + missing.join('」、「') + '」。目前表單題目為：' +
       Object.keys(namedValues).join('、') + '。請確認表單題目未被改名，或修改 code.gs 的 Q_ 設定。');
   }
-  const tablet = tabletRequest_(cartText, mode, answerOf_(namedValues, Q_TABLET_COUNT));
+  const tablet = tabletRequest_(cartText, mode, answerOf_(namedValues, Q_TABLET_COUNT), carts);
   const unit = String(answerOf_(namedValues, Q_TABLET_UNIT) || '').trim();
   return {
     kind: KIND.TABLET,
@@ -409,10 +414,15 @@ function parseTabletSubmission_(namedValues, name, email, time) {
   };
 }
 
-/** @returns {{cart: string, max: number, count: number, whole: boolean, note: string}} */
-function tabletRequest_(cartText, mode, countText) {
+/**
+ * carts：「平板車清單」(getTabletCarts_)。選項文字為「名稱（N 台）」，以名稱比對 (台數改過也認得)。
+ * @returns {{cart: string, max: number, count: number, whole: boolean, note: string}}
+ */
+function tabletRequest_(cartText, mode, countText, carts) {
   const text = String(cartText == null ? '' : cartText).trim();
-  const cart = TABLET_CARTS.filter(function (c) { return text.indexOf(c.name) === 0; })[0];
+  const cart = (carts || DEFAULT_TABLET_CARTS).filter(function (c) {
+    return text === c.name || text.indexOf(c.name + '（') === 0;
+  })[0];
   const name = cart ? cart.name : text;
   const max = cart ? cart.max : 0;
   const whole = String(mode == null ? '' : mode).indexOf('整車') >= 0;
@@ -428,6 +438,25 @@ function tabletRequest_(cartText, mode, countText) {
     }
   }
   return { cart: name, max: max, count: count, whole: whole || (max > 0 && count === max), note: note };
+}
+
+/** 「平板車清單」各列 → [{id, name, max}]；沒有名稱或台數不是正整數的列略過，代號空白時用名稱。 */
+function parseTabletRows_(values) {
+  const seen = {};
+  const carts = [];
+  values.forEach(function (row) {
+    const name = String(row[1] == null ? '' : row[1]).trim();
+    const max = Number(row[2]);
+    if (!name || seen[name] || !(max > 0) || Math.floor(max) !== max) return;
+    seen[name] = true;
+    carts.push({ id: String(row[0] == null ? '' : row[0]).trim() || name, name: name, max: max });
+  });
+  return carts;
+}
+
+/** 表單下拉選單的選項文字。 */
+function tabletCartLabels_(carts) {
+  return carts.map(function (c) { return c.name + '（' + c.max + ' 台）'; });
 }
 
 function tabletText_(cart, count) {
@@ -878,6 +907,22 @@ function getSoftwareList_(ss) {
     if (list.length > 0) return list;
   }
   return parseSoftwareRows_(DEFAULT_SOFTWARE);
+}
+
+/** 讀「平板車清單」；分頁不存在時以預設內容建立，沒有有效的列時用預設值。 */
+function getTabletCarts_(ss) {
+  let sheet = ss.getSheetByName(TABLET_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(TABLET_SHEET_NAME);
+    sheet.getRange(1, 1, 1, 3).setValues([['代號', '名稱', '台數']]);
+    sheet.getRange(2, 1, DEFAULT_TABLET_CARTS.length, 3).setValues(DEFAULT_TABLET_CARTS.map(function (c) {
+      return [c.id, c.name, c.max];
+    }));
+    sheet.setFrozenRows(1);
+  }
+  const lastRow = sheet.getLastRow();
+  const carts = lastRow < 2 ? [] : parseTabletRows_(sheet.getRange(2, 1, lastRow - 1, 3).getValues());
+  return carts.length > 0 ? carts : DEFAULT_TABLET_CARTS.slice();
 }
 
 /** 取得「申請登記」分頁，不存在時自動建立。 */

@@ -93,6 +93,10 @@ function setupSheets() {
     licenseSheet.getRange(1, 4).setValue('軟體');
   }
 
+  // 平板車清單：不存在時以預設內容建立
+  if (!ss.getSheetByName(TABLET_SHEET_NAME)) created.push(TABLET_SHEET_NAME);
+  getTabletCarts_(ss);
+
   const softwareList = getSoftwareList_(ss);
   refreshStats_(ss, softwareList, readRegistrations_(regSheet));
 
@@ -159,7 +163,7 @@ function setupForm() {
     // 已建立：就地更新同一份表單
     let changes;
     try {
-      changes = syncEnrollmentForm_(form, softwareList);
+      changes = syncEnrollmentForm_(form, softwareList, getTabletCarts_(ss));
     } catch (error) {
       notify_('無法更新申請表單：' + (error.message || error) +
         '\n\n請還原表單上的題目或區段名稱，或執行 resetEnrollmentForm() 後重新建立表單。');
@@ -180,7 +184,7 @@ function setupForm() {
     const sheetIdsBefore = ss.getSheets().map(function (sheet) { return sheet.getSheetId(); });
     form = FormApp.create(FORM_TITLE);
     buildEnrollmentForm_(form);
-    syncEnrollmentForm_(form, softwareList);
+    syncEnrollmentForm_(form, softwareList, getTabletCarts_(ss));
     form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
     props.setProperty(PROP.FORM_ID, form.getId());
     props.deleteProperty(PROP.RESPONSE_SHEET_ID);
@@ -239,7 +243,7 @@ function buildEnrollmentForm_(form) {
  * 既有題目以標題辨識、就地修改，所以回應分頁的既有欄位與資料不受影響。
  * @returns {string[]} 變更說明
  */
-function syncEnrollmentForm_(form, softwareList) {
+function syncEnrollmentForm_(form, softwareList, carts) {
   const T = FormApp.ItemType;
   const NAV = FormApp.PageNavigationType;
   const changes = [];
@@ -314,20 +318,15 @@ function syncEnrollmentForm_(form, softwareList) {
   pageTablet.asPageBreakItem().setHelpText('登記後即可在「數位學習精進方案成果填報」填報平板借用，填報時請使用同一個 Google 帳號。' +
     TABLET_RESUBMIT_TEXT);
   tabletUnit.asTextItem().setHelpText('例：三年二班導師、英語科任、教務處').setRequired(true);
-  const cartItem = tabletCart.asListItem();
-  cartItem.setChoiceValues(TABLET_CARTS.map(function (c) { return c.name + '（' + c.max + ' 台）'; })).setRequired(true);
+  tabletCart.asListItem().setRequired(true);
+  applyTabletCarts_(form, carts || DEFAULT_TABLET_CARTS);
   const modeItem = tabletMode.asMultipleChoiceItem();
   modeItem.setChoices([
     modeItem.createChoice(TABLET_MODE.WHOLE, NAV.SUBMIT),
     modeItem.createChoice(TABLET_MODE.PARTIAL, pageTabletCount.asPageBreakItem())
   ]).setHelpText('整車借用以該車台數登記；部分借用請在下一頁填寫數量。').setRequired(true);
-  const maxCart = Math.max.apply(null, TABLET_CARTS.map(function (c) { return c.max; }));
   tabletCount.asTextItem()
     .setHelpText('請填 1 到該平板車的台數；超過該車台數時以整車計。')
-    .setValidation(FormApp.createTextValidation()
-      .setHelpText('請填 1～' + maxCart + ' 的數字')
-      .requireNumberBetween(1, maxCart)
-      .build())
     .setRequired(true);
 
   // ---------- 區段 2【TeacherSay】：必填、只有一個選項；沒勾就不能前往下一頁 ----------
@@ -486,7 +485,35 @@ function findItemByTitle_(form, title) {
 function refreshFormRemaining_(ss, stats) {
   const form = getEnrollmentForm_();
   if (!form) return false;
+  try {
+    applyTabletCarts_(form, getTabletCarts_(ss));
+  } catch (error) {
+    Logger.log('更新平板車選項失敗：' + error);
+  }
   return applyRemainingHelp_(form, stats);
+}
+
+/**
+ * 依「平板車清單」更新表單的平板車選項與數量上限；選項沒變時不動表單。
+ * @returns {boolean} 是否有更新
+ */
+function applyTabletCarts_(form, carts) {
+  const cartItem = findItemByTitle_(form, Q_TABLET_CART);
+  if (!cartItem || carts.length === 0) return false;
+  const labels = tabletCartLabels_(carts);
+  const list = cartItem.asListItem();
+  const current = list.getChoices().map(function (choice) { return choice.getValue(); });
+  if (current.join('\n') === labels.join('\n')) return false;
+  list.setChoiceValues(labels);
+  const countItem = findItemByTitle_(form, Q_TABLET_COUNT);
+  if (countItem) {
+    const maxCart = Math.max.apply(null, carts.map(function (c) { return c.max; }));
+    countItem.asTextItem().setValidation(FormApp.createTextValidation()
+      .setHelpText('請填 1～' + maxCart + ' 的數字')
+      .requireNumberBetween(1, maxCart)
+      .build());
+  }
+  return true;
 }
 
 /**

@@ -898,6 +898,45 @@ ok('tablet borrowing: own branch, cart + count, 已登記 with no seats, indepen
   assert.ok(before < mails);
 });
 
+ok('平板車清單 sheet: created with defaults; edits reach the form and new registrations without republishing', () => {
+  const { E, form, sheet } = readyEnv();
+  const carts = E.ss.getSheetByName('平板車清單');
+  assert.ok(carts, 'setupSheets creates the sheet');
+  assert.deepStrictEqual(carts.getRange(1, 1, 3, 3).getValues(), [['代號', '名稱', '台數'], ['A', '平板車 A', 28], ['B', '平板車 B', 28]]);
+  assert.strictEqual(item(form, Q.tabletCart).choices.length, 10);
+
+  // the admin changes cart A to 32, adds a cart and leaves a broken row
+  carts.getRange(2, 3).setValue(32);
+  carts.appendRow(['I', '平板車 I', 24]);
+  carts.appendRow(['', '', '']);
+  carts.appendRow(['J', '平板車 J', 'many']);
+  E.call('menuRefreshAll()');
+  const choices = item(form, Q.tabletCart).choices;
+  assert.deepStrictEqual([choices[0], choices.length, choices[choices.length - 1]], ['平板車 A（32 台）', 11, '平板車 I（24 台）']);
+  assert.deepStrictEqual([item(form, Q.tabletCount).validation.min, item(form, Q.tabletCount).validation.max], [1, 32]);
+  assert.strictEqual(walkForm(form, tabletAnswers({ name: 'x', email: 'x@gmail.com' }, '平板車 A（32 台）', PARTIAL, 32)).submitted, true);
+
+  // a whole-cart registration uses the new size; an answer with the old label still finds the cart
+  submitTo(E, sheet, tabletAnswers({ name: '甲', email: 'a@gmail.com' }, '平板車 A（32 台）', WHOLE), t(1));
+  submitTo(E, sheet, tabletAnswers({ name: '乙', email: 'b@gmail.com' }, '平板車 A（28 台）', PARTIAL, 30), t(2));
+  submitTo(E, sheet, tabletAnswers({ name: '丙', email: 'c@gmail.com' }, '平板車 I（24 台）', PARTIAL, 30), t(3));
+  const rows = regRows14(E);
+  assert.deepStrictEqual(rows.map((r) => [r[1], r[12], r[13]]), [['甲', '平板車 A', 32], ['乙', '平板車 A', 30], ['丙', '平板車 I', 24]]);
+  assert.ok(rows[2][10].includes('以整車 24 台計'));
+
+  // a submission refreshes the choices too; unchanged choices leave the form alone
+  carts.getRange(2, 3).setValue(30);
+  submitTo(E, sheet, answersOf(teacher(4, '一年級'), 'Kahoot 教師版'), t(4));
+  assert.strictEqual(item(form, Q.tabletCart).choices[0], '平板車 A（30 台）');
+  assert.strictEqual(E.call('applyTabletCarts_(__f, getTabletCarts_(__ss))', { __f: form, __ss: E.ss }), false);
+
+  // an emptied sheet falls back to the defaults instead of an empty dropdown
+  carts.clearContents();
+  carts.getRange(1, 1, 1, 3).setValues([['代號', '名稱', '台數']]);
+  E.call('menuRefreshAll()');
+  assert.strictEqual(item(form, Q.tabletCart).choices.length, 10);
+});
+
 // ============ 6. approval + issuing ============
 ok('issuing: approved rows only, HiTeach serials, account wording, one mail per person with CC, revoking promotes the waitlist', () => {
   const { E, lic, ww, send } = readyEnv();

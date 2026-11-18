@@ -471,6 +471,7 @@ function backfillFromResponses_(ss) {
   if (responseSheet.getLastRow() < 2) return { added: 0, canceled: 0 };
 
   const softwareList = getSoftwareList_(ss);
+  const carts = getTabletCarts_(ss);
   const values = responseSheet.getRange(1, 1, responseSheet.getLastRow(), responseSheet.getLastColumn()).getValues();
   const headers = values[0];
   let added = 0;
@@ -485,7 +486,7 @@ function backfillFromResponses_(ss) {
     });
     let sub;
     try {
-      sub = parseSubmission_(namedValues, softwareList, time);
+      sub = parseSubmission_(namedValues, softwareList, time, carts);
     } catch (error) {
       Logger.log('第 ' + (r + 1) + ' 列無法解析：' + error);
       continue;

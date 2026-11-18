@@ -266,7 +266,7 @@ function runEnrollmentTests() {
   check('回條：說明重新填寫以最後一次為準', changedHtml.indexOf(RESUBMIT_RULE_TEXT) >= 0, true);
   // --- 平板借用 ---
   const tr = function (cart, mode, count) {
-    const r = tabletRequest_(cart, mode, count);
+    const r = tabletRequest_(cart, mode, count, DEFAULT_TABLET_CARTS);
     return [r.cart, r.count, r.whole, r.note];
   };
   check('平板借用：整車以該車台數登記', tr('平板車 G（30 台）', '整車借用', ''), ['平板車 G', 30, true, '']);
@@ -275,6 +275,15 @@ function runEnrollmentTests() {
     ['平板車 A', 28, true, '填寫 40 台超過該車台數，以整車 28 台計']);
   check('平板借用：數量不正確時留空並加註', tr('白車（28 台）', '部分借用（填寫數量）', 'abc'), ['白車', '', false, '未填寫正確的借用數量']);
   check('平板借用：不在清單的平板車照填寫內容並加註', tr('平板車 Z', '整車借用', ''), ['平板車 Z', '', true, '平板車不在清單中，請確認']);
+  const sheetCarts = parseTabletRows_([
+    ['A', ' 平板車 A ', 32], ['', '平板車 AB', '20'], ['X', '', 10], ['Y', '壞掉的車', 0], ['Z', '半台', 2.5], ['A2', '平板車 A', 9]
+  ]);
+  check('平板車清單：去空白、略過無效的列與重複名稱，代號空白時用名稱',
+    sheetCarts.map(function (c) { return [c.id, c.name, c.max]; }), [['A', '平板車 A', 32], ['平板車 AB', '平板車 AB', 20]]);
+  check('平板車清單：台數改過的舊選項仍以名稱認得，名稱相近不會認錯',
+    [tabletRequest_('平板車 A（28 台）', '整車借用', '', sheetCarts).count, tabletRequest_('平板車 AB（20 台）', '整車借用', '', sheetCarts).cart],
+    [32, '平板車 AB']);
+  check('平板車清單：選項文字', tabletCartLabels_(sheetCarts), ['平板車 A（32 台）', '平板車 AB（20 台）']);
   const tabletSub = parseSubmission_({
     '您的大名': ['張老師'], '您要用來開通授權的 Google 帳號': ['chang@x.tw'], '申請項目': ['平板借用'],
     '您的職務與任教班級（或科目、處室）': ['教務處'], '借用的平板車': ['平板車 B（28 台）'], '借用方式': ['部分借用（填寫數量）'],
