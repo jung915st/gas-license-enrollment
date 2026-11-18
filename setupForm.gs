@@ -481,16 +481,25 @@ function findItemByTitle_(form, title) {
   return null;
 }
 
-/** 把剩餘名額寫到表單「軟體」題目下方的說明文字。 */
+/**
+ * 把剩餘名額寫到表單「軟體」題目下方的說明文字，並依「平板車清單」更新平板車選項。
+ * @returns {{remaining: boolean, tablet: {carts: Object[], fromSheet: boolean, updated: boolean, error: string, noForm: boolean}}}
+ */
 function refreshFormRemaining_(ss, stats) {
+  const cartState = readTabletCarts_(ss);
+  const tablet = { carts: cartState.carts, fromSheet: cartState.fromSheet, updated: false, error: '', noForm: false };
   const form = getEnrollmentForm_();
-  if (!form) return false;
+  if (!form) {
+    tablet.noForm = true;
+    return { remaining: false, tablet: tablet };
+  }
   try {
-    applyTabletCarts_(form, getTabletCarts_(ss));
+    tablet.updated = applyTabletCarts_(form, cartState.carts);
   } catch (error) {
+    tablet.error = String(error);
     Logger.log('更新平板車選項失敗：' + error);
   }
-  return applyRemainingHelp_(form, stats);
+  return { remaining: applyRemainingHelp_(form, stats), tablet: tablet };
 }
 
 /**

@@ -284,6 +284,13 @@ function runEnrollmentTests() {
     [tabletRequest_('平板車 A（28 台）', '整車借用', '', sheetCarts).count, tabletRequest_('平板車 AB（20 台）', '整車借用', '', sheetCarts).cart],
     [32, '平板車 AB']);
   check('平板車清單：選項文字', tabletCartLabels_(sheetCarts), ['平板車 A（32 台）', '平板車 AB（20 台）']);
+  const cartsText = function (extra) {
+    return buildTabletCartsText_(Object.assign({ carts: sheetCarts, fromSheet: true, updated: false, error: '', noForm: false }, extra)).split('\n');
+  };
+  check('重新統計訊息：列出各車台數與表單是否更新', cartsText({ updated: true }),
+    ['平板車（「平板車清單」，共 2 台車）：', '・平板車 A：32 台', '・平板車 AB：20 台', '表單的平板車選項與數量上限已更新為上列台數。', '成果填報網頁會在 5 分鐘內套用。']);
+  check('重新統計訊息：找不到表單、更新失敗', [cartsText({ noForm: true })[3], cartsText({ error: 'x' })[3]],
+    ['找不到申請表單，平板車選項未更新。', '表單的平板車選項更新失敗：x']);
   const tabletSub = parseSubmission_({
     '您的大名': ['張老師'], '您要用來開通授權的 Google 帳號': ['chang@x.tw'], '申請項目': ['平板借用'],
     '您的職務與任教班級（或科目、處室）': ['教務處'], '借用的平板車': ['平板車 B（28 台）'], '借用方式': ['部分借用（填寫數量）'],

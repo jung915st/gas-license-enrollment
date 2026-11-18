@@ -911,6 +911,11 @@ ok('平板車清單 sheet: created with defaults; edits reach the form and new r
   carts.appendRow(['', '', '']);
   carts.appendRow(['J', '平板車 J', 'many']);
   E.call('menuRefreshAll()');
+  let msg = E.alerts[E.alerts.length - 1];
+  assert.ok(msg.startsWith('已重新統計。') && msg.includes('・Kahoot 教師版：剩餘'), msg);
+  assert.ok(msg.includes('平板車（「平板車清單」，共 11 台車）：') && msg.includes('・平板車 A：32 台') && msg.includes('・平板車 I：24 台'), msg);
+  assert.ok(msg.includes('表單的平板車選項與數量上限已更新為上列台數。') && msg.includes('成果填報網頁會在 5 分鐘內套用。'), msg);
+  assert.ok(!msg.includes('平板車 J'), 'invalid rows are not listed');
   const choices = item(form, Q.tabletCart).choices;
   assert.deepStrictEqual([choices[0], choices.length, choices[choices.length - 1]], ['平板車 A（32 台）', 11, '平板車 I（24 台）']);
   assert.deepStrictEqual([item(form, Q.tabletCount).validation.min, item(form, Q.tabletCount).validation.max], [1, 32]);
@@ -929,12 +934,16 @@ ok('平板車清單 sheet: created with defaults; edits reach the form and new r
   submitTo(E, sheet, answersOf(teacher(4, '一年級'), 'Kahoot 教師版'), t(4));
   assert.strictEqual(item(form, Q.tabletCart).choices[0], '平板車 A（30 台）');
   assert.strictEqual(E.call('applyTabletCarts_(__f, getTabletCarts_(__ss))', { __f: form, __ss: E.ss }), false);
+  E.call('menuRefreshAll()');
+  assert.ok(E.alerts[E.alerts.length - 1].includes('・平板車 A：30 台') && E.alerts[E.alerts.length - 1].includes('表單的平板車選項與上列相同，未變更。'));
 
   // an emptied sheet falls back to the defaults instead of an empty dropdown
   carts.clearContents();
   carts.getRange(1, 1, 1, 3).setValues([['代號', '名稱', '台數']]);
   E.call('menuRefreshAll()');
   assert.strictEqual(item(form, Q.tabletCart).choices.length, 10);
+  msg = E.alerts[E.alerts.length - 1];
+  assert.ok(msg.includes('「平板車清單」沒有有效的列，使用預設平板車。') && msg.includes('・白車：28 台') && msg.includes('已更新為上列台數'), msg);
 });
 
 // ============ 6. approval + issuing ============

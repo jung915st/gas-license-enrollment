@@ -911,6 +911,11 @@ function getSoftwareList_(ss) {
 
 /** 讀「平板車清單」；分頁不存在時以預設內容建立，沒有有效的列時用預設值。 */
 function getTabletCarts_(ss) {
+  return readTabletCarts_(ss).carts;
+}
+
+/** 同 getTabletCarts_，另回傳 fromSheet：是否來自分頁 (false＝分頁沒有有效的列，用預設值)。 */
+function readTabletCarts_(ss) {
   let sheet = ss.getSheetByName(TABLET_SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(TABLET_SHEET_NAME);
@@ -922,7 +927,26 @@ function getTabletCarts_(ss) {
   }
   const lastRow = sheet.getLastRow();
   const carts = lastRow < 2 ? [] : parseTabletRows_(sheet.getRange(2, 1, lastRow - 1, 3).getValues());
-  return carts.length > 0 ? carts : DEFAULT_TABLET_CARTS.slice();
+  return carts.length > 0 ? { carts: carts, fromSheet: true } : { carts: DEFAULT_TABLET_CARTS.slice(), fromSheet: false };
+}
+
+/**
+ * 「重新統計」訊息裡的平板車段落：各車台數，以及表單選項是否更新。
+ * @param {{carts: Object[], fromSheet: boolean, updated: boolean, error: string, noForm: boolean}} result
+ */
+function buildTabletCartsText_(result) {
+  const lines = ['平板車（「' + TABLET_SHEET_NAME + '」，共 ' + result.carts.length + ' 台車）：'];
+  if (!result.fromSheet) lines.push('「' + TABLET_SHEET_NAME + '」沒有有效的列，使用預設平板車。');
+  result.carts.forEach(function (c) { lines.push('・' + c.name + '：' + c.max + ' 台'); });
+  if (result.error) {
+    lines.push('表單的平板車選項更新失敗：' + result.error);
+  } else if (result.noForm) {
+    lines.push('找不到申請表單，平板車選項未更新。');
+  } else {
+    lines.push(result.updated ? '表單的平板車選項與數量上限已更新為上列台數。' : '表單的平板車選項與上列相同，未變更。');
+  }
+  lines.push('成果填報網頁會在 5 分鐘內套用。');
+  return lines.join('\n');
 }
 
 /** 取得「申請登記」分頁，不存在時自動建立。 */

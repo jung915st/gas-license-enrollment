@@ -49,8 +49,11 @@ function menuShowFormUrls() {
 }
 
 function menuRefreshAll() {
-  const state = recalcAll_(SpreadsheetApp.getActiveSpreadsheet());
-  notify_('已重新統計。\n\n' + buildRemainingText_(state.stats));
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const state = recalcAll_(ss);
+  const tablet = state.form ? state.form.tablet
+    : Object.assign(readTabletCarts_(ss), { updated: false, error: state.formError || '', noForm: !state.formError });
+  notify_('已重新統計。\n\n' + buildRemainingText_(state.stats) + '\n\n' + buildTabletCartsText_(tablet));
 }
 
 function menuRerank() {
@@ -205,12 +208,15 @@ function recalcAll_(ss) {
   const rows = readRegistrations_(sheet);
   applyRanks_(sheet, rows, softwareList);
   const stats = refreshStats_(ss, softwareList, rows);
+  let form = null;
+  let formError = '';
   try {
-    refreshFormRemaining_(ss, stats);
+    form = refreshFormRemaining_(ss, stats);
   } catch (error) {
+    formError = String(error);
     Logger.log("更新表單剩餘名額失敗：" + error);
   }
-  return { rows: rows, stats: stats, softwareList: softwareList };
+  return { rows: rows, stats: stats, softwareList: softwareList, form: form, formError: formError };
 }
 
 function buildIssuePlan_(ss) {
