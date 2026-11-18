@@ -1,5 +1,5 @@
 // 教學軟體授權登記與分配系統
-// 版本 v3.4
+// 版本 v3.5
 // 更新：表單送出改為「登記」，依登記先後排定正取／備取，不再自動發放序號。
 //       管理者在「申請登記」分頁勾選核准後，再由 allocate.gs 從「序號列表」發放並寄信通知。
 // v3.1：改用 setupForm() 建立的新表單 (舊表單的回應一律忽略，避免重複紀錄)；
@@ -12,6 +12,9 @@
 //       同一帳號另登記了其他軟體時，在「申請登記」備註提醒管理者。
 // v3.4：同一帳號重新填表以最後一次為準：先前登記、這次沒選的軟體自動取消 (已核准者只在備註提醒，已發放者不動)，
 //       回條列出已取消的軟體；補登依序重跑時結果相同。表單說明與每封回條都說明這個規則。
+// v3.5：表單第一頁加「申請項目」：教學軟體授權／平板借用。平板借用登記借用的平板車與數量 (整車或填數量)，
+//       不需 TeacherSay、沒有名額與核准，狀態為「已登記」；成果填報系統用它檢查平板借用的填報帳號。
+//       兩種登記互不取消；平板借用重新填寫也以最後一次為準。
 //
 // 檔案分工：
 //   code.gs             設定、表單送出登記、正取／備取排序、統計
@@ -42,6 +45,22 @@ const NONE_CHOICE = '不申請其他軟體（只申請 TeacherSay）';   // 下�
 const Q_WORKSPACE = '申請 Google AI Pro 教育版的學校帳號';     // 選 Google AI Pro 才出現且必填；授權通知信的副本收件信箱
 
 // 舊版題目 (v3.1／v3.2)：setupForm() 更新表單時會刪除，只用來解析回應分頁裡的舊回應 (補登用)
+// v3.5 申請項目與平板借用
+const Q_KIND = '申請項目';                                   // 第一頁，依答案前往教學軟體或平板借用
+const KIND = { SOFTWARE: '教學軟體授權', TABLET: '平板借用' };
+const TABLET_ITEM = '平板借用';                              // 「申請登記」軟體欄的名稱 (成果填報系統比對用，勿改)
+const Q_TABLET_UNIT = '您的職務與任教班級（或科目、處室）';
+const Q_TABLET_CART = '借用的平板車';
+const Q_TABLET_MODE = '借用方式';
+const Q_TABLET_COUNT = '借用數量（台）';
+const TABLET_MODE = { WHOLE: '整車借用', PARTIAL: '部分借用（填寫數量）' };
+// 平板車與台數 (與成果填報系統的平板車相同)
+const TABLET_CARTS = [
+  { name: '平板車 A', max: 28 }, { name: '平板車 B', max: 28 }, { name: '平板車 C', max: 28 },
+  { name: '平板車 D', max: 28 }, { name: '平板車 E', max: 28 }, { name: '平板車 F', max: 28 },
+  { name: '平板車 G', max: 30 }, { name: '平板車 H', max: 30 }, { name: '黑車', max: 30 }, { name: '白車', max: 28 }
+];
+
 const Q_SOFTWARE = '您要申請的軟體授權';            // 舊：其他軟體核取方塊 (可複選)
 const Q_AI_PRO = '是否申請 Google AI Pro 教育版？';  // 舊：是／否題
 const AI_YES = '是';
@@ -83,16 +102,20 @@ const DEFAULT_SOFTWARE = [
 // 「序號列表」D 欄留空時，視為這套軟體的序號 (相容舊版只有 HiTeach 的序號表)
 const DEFAULT_SERIAL_SOFTWARE = 'HiTeach 專業版';
 
-const STATUS = { OK: '正取', WAIT: '備取', INELIGIBLE: '不符資格', CANCEL: '取消', ISSUED: '已發放' };
+const STATUS = { OK: '正取', WAIT: '備取', INELIGIBLE: '不符資格', CANCEL: '取消', ISSUED: '已發放', REGISTERED: '已登記' };
 
 // 「申請登記」分頁欄位 (1 起算)
 const COL = {
   TIME: 1, NAME: 2, EMAIL: 3, IDENTITY: 4, SOFTWARE: 5, STATUS: 6,
-  RANK: 7, APPROVED: 8, SERIAL: 9, ISSUED_AT: 10, NOTE: 11, WORKSPACE: 12
+  RANK: 7, APPROVED: 8, SERIAL: 9, ISSUED_AT: 10, NOTE: 11, WORKSPACE: 12, CART: 13, COUNT: 14
 };
-const REG_HEADERS = ['登記時間', '姓名', 'Google 帳號', '職務', '軟體', '狀態', '順位', '核准', '序號', '發放時間', '備註', '學校帳號'];
+const REG_HEADERS = ['登記時間', '姓名', 'Google 帳號', '職務', '軟體', '狀態', '順位', '核准', '序號', '發放時間', '備註', '學校帳號',
+  '借用平板車', '借用數量'];
 
 const SCHOOL_SIGNATURE = '臺中市北區立人國民小學 資訊組 敬上';
+
+// 平板借用重新填寫的規則 (表單與回條共用)
+const TABLET_RESUBMIT_TEXT = '要更改借用的平板車或數量，請用同一個 Google 帳號重新填寫，以最後一次為準。';
 
 // 重新填表的規則 (表單說明與登記回條共用)
 const RESUBMIT_RULE_TEXT = '要更改申請的軟體，請用同一個 Google 帳號重新填寫，以最後一次為準：' +
@@ -143,14 +166,15 @@ function onFormSubmit(e) {
     }
 
     // 登記已寫入試算表；回條寄送失敗只通知管理者，不視為登記失敗
-    const outcomes = buildOutcomes_(result.rows, sub, result.added);
+    const isTablet = sub.kind === KIND.TABLET;
+    const outcomes = isTablet ? [] : buildOutcomes_(result.rows, sub, result.added);
     let receiptProblem = isEmail_(sub.email) ? '' : 'Google 帳號格式有誤';
     if (!receiptProblem) {
       try {
         MailApp.sendEmail(withCc_({
           to: sub.email,
-          subject: "【已登記】教學軟體授權申請",
-          htmlBody: buildReceiptHtml_(sub, outcomes, result)
+          subject: isTablet ? "【已登記】平板借用" : "【已登記】教學軟體授權申請",
+          htmlBody: isTablet ? buildTabletReceiptHtml_(sub, result) : buildReceiptHtml_(sub, outcomes, result)
         }, sub.email, sub.workspace));
         Logger.log("登記回條已寄出：" + sub.email);
       } catch (mailError) {
@@ -187,6 +211,7 @@ function onFormSubmit(e) {
 function processSubmission_(ss, sub, softwareList) {
   const sheet = getRegSheet_(ss);
   let rows = readRegistrations_(sheet);
+  if (sub.kind === KIND.TABLET) return processTablet_(sheet, rows, sub);
   const split = splitSelections_(rows, sub);
   const replaced = applyReplacement_(sheet, rows, sub);
   if (split.toAdd.length > 0) {
@@ -321,6 +346,8 @@ function parseSoftwareSelection_(answer, softwareList) {
 function parseSubmission_(namedValues, softwareList, time) {
   const name = answerOf_(namedValues, Q_NAME);
   const email = answerOf_(namedValues, Q_EMAIL);
+  const kind = answerOf_(namedValues, Q_KIND);
+  if (kind !== null && String(kind).indexOf(KIND.TABLET) >= 0) return parseTabletSubmission_(namedValues, name, email, time);
   const role = answerOf_(namedValues, Q_ROLE);
   const teacherSay = answerOf_(namedValues, Q_TEACHERSAY);
   const pick = answerOf_(namedValues, Q_PICK);
@@ -339,6 +366,7 @@ function parseSubmission_(namedValues, softwareList, time) {
   const identity = buildIdentity_(role,
     answerOf_(namedValues, Q_GRADE), answerOf_(namedValues, Q_SUBJECT), answerOf_(namedValues, Q_OFFICE));
   return {
+    kind: KIND.SOFTWARE,
     time: time || new Date(),
     name: name,
     email: email,
@@ -349,6 +377,99 @@ function parseSubmission_(namedValues, softwareList, time) {
     selections: collectSelections_([teacherSay, groupOf_(identity) === ROLE.OFFICE ? pickOffice : pick, software],
       answerOf_(namedValues, Q_AI_PRO), softwareList)
   };
+}
+
+/**
+ * 平板借用：平板車、借用方式與數量。整車借用＝該車台數；填的數量超過該車台數時以整車計並加註。
+ */
+function parseTabletSubmission_(namedValues, name, email, time) {
+  const cartText = answerOf_(namedValues, Q_TABLET_CART);
+  const mode = answerOf_(namedValues, Q_TABLET_MODE);
+  const missing = [];
+  if (name === null) missing.push(Q_NAME);
+  if (email === null) missing.push(Q_EMAIL);
+  if (cartText === null) missing.push(Q_TABLET_CART);
+  if (mode === null) missing.push(Q_TABLET_MODE);
+  if (missing.length > 0) {
+    throw new Error('表單找不到題目：「' + missing.join('」、「') + '」。目前表單題目為：' +
+      Object.keys(namedValues).join('、') + '。請確認表單題目未被改名，或修改 code.gs 的 Q_ 設定。');
+  }
+  const tablet = tabletRequest_(cartText, mode, answerOf_(namedValues, Q_TABLET_COUNT));
+  const unit = String(answerOf_(namedValues, Q_TABLET_UNIT) || '').trim();
+  return {
+    kind: KIND.TABLET,
+    time: time || new Date(),
+    name: name,
+    email: email,
+    identity: unit,
+    group: '',
+    workspace: '',
+    selections: [TABLET_ITEM],
+    tablet: tablet
+  };
+}
+
+/** @returns {{cart: string, max: number, count: number, whole: boolean, note: string}} */
+function tabletRequest_(cartText, mode, countText) {
+  const text = String(cartText == null ? '' : cartText).trim();
+  const cart = TABLET_CARTS.filter(function (c) { return text.indexOf(c.name) === 0; })[0];
+  const name = cart ? cart.name : text;
+  const max = cart ? cart.max : 0;
+  const whole = String(mode == null ? '' : mode).indexOf('整車') >= 0;
+  let count = whole ? (cart ? max : '') : parseInt(String(countText == null ? '' : countText).trim(), 10);
+  let note = cart ? '' : '平板車不在清單中，請確認';
+  if (!whole) {
+    if (!(count > 0)) {
+      count = '';
+      note = [note, '未填寫正確的借用數量'].filter(function (s) { return s; }).join('；');
+    } else if (max && count > max) {
+      note = [note, '填寫 ' + count + ' 台超過該車台數，以整車 ' + max + ' 台計'].filter(function (s) { return s; }).join('；');
+      count = max;
+    }
+  }
+  return { cart: name, max: max, count: count, whole: whole || (max > 0 && count === max), note: note };
+}
+
+function tabletText_(cart, count) {
+  return cart + (count !== '' && count !== undefined && count !== null ? '，' + count + ' 台' : '');
+}
+
+/**
+ * 平板借用登記：同一帳號以最後一次為準。比這次更早、仍有效的平板借用登記：
+ * 內容相同 → 不變；內容不同 → 取消舊的並新增一列。這次 (或更晚) 的登記已存在時不重複處理，補登重跑結果相同。
+ * 不影響這個帳號的教學軟體登記。
+ * @returns {{rows: Object[], added: string[], duplicates: string[], canceled: string[], flagged: string[], previous: Object}}
+ */
+function processTablet_(sheet, rows, sub) {
+  const email = normalize_(sub.email);
+  const subTime = timeValue_(sub.time);
+  const mine = rows.filter(function (row) { return normalize_(row.email) === email && row.software === TABLET_ITEM; });
+  const result = { rows: rows, added: [], duplicates: [], canceled: [], flagged: [], previous: null };
+  if (mine.some(function (row) { return timeValue_(row.time) >= subTime; })) {
+    result.duplicates.push(TABLET_ITEM);
+    return result;
+  }
+  const active = mine.filter(function (row) { return row.status !== STATUS.CANCEL; });
+  const same = active.filter(function (row) {
+    return row.cart === sub.tablet.cart && String(row.count) === String(sub.tablet.count) && row.identity === sub.identity;
+  });
+  if (same.length > 0) {
+    result.duplicates.push(TABLET_ITEM);
+    return result;
+  }
+  const whenText = Utilities.formatDate(new Date(subTime), 'Asia/Taipei', 'MM/dd HH:mm');
+  active.forEach(function (row) {
+    result.previous = { cart: row.cart, count: row.count };
+    row.status = STATUS.CANCEL;
+    row.note = appendNote_(row.note, '申請人 ' + whenText + ' 重新填寫平板借用，改為新的登記');
+    sheet.getRange(row.rowIndex, COL.STATUS, 1, 2).setValues([[STATUS.CANCEL, '']]);
+    sheet.getRange(row.rowIndex, COL.NOTE).setValue(row.note);
+    result.canceled.push(TABLET_ITEM);
+  });
+  appendRegistrations_(sheet, sub, [TABLET_ITEM]);
+  result.added.push(TABLET_ITEM);
+  result.rows = readRegistrations_(sheet);
+  return result;
 }
 
 /**
@@ -407,6 +528,7 @@ function withCc_(message, email, workspace) {
 function registrationNote_(sub, software) {
   const notes = [];
   if (!isEmail_(sub.email)) notes.push('Google 帳號格式有誤，無法寄送通知');
+  if (software === TABLET_ITEM && sub.tablet && sub.tablet.note) notes.push(sub.tablet.note);
   if (software === WORKSPACE_ACCOUNT_SOFTWARE) {
     if (!isEmail_(sub.workspace)) notes.push('未填學校帳號');
     else if (normalize_(sub.workspace).slice(-(SCHOOL_DOMAIN.length + 1)) !== '@' + SCHOOL_DOMAIN) notes.push('學校帳號非 @' + SCHOOL_DOMAIN);
@@ -448,6 +570,7 @@ function planReplacement_(rows, sub) {
   const plan = { cancel: [], flag: [] };
   rows.forEach(function (row) {
     if (normalize_(row.email) !== email || timeValue_(row.time) >= subTime) return;
+    if (row.software === TABLET_ITEM) return; // 平板借用與教學軟體互不取消
     if (row.software === REQUIRED_SOFTWARE || sub.selections.indexOf(row.software) >= 0) return;
     if (row.status === STATUS.CANCEL || row.status === STATUS.ISSUED) return;
     (row.approved ? plan.flag : plan.cancel).push(row);
@@ -489,7 +612,7 @@ function staleOtherSoftwareNotes_(rows, sub) {
   });
   const held = [];
   mine.map(function (row) { return row.software; }).concat(sub.selections).forEach(function (software) {
-    if (software !== REQUIRED_SOFTWARE && held.indexOf(software) < 0) held.push(software);
+    if (software !== REQUIRED_SOFTWARE && software !== TABLET_ITEM && held.indexOf(software) < 0) held.push(software);
   });
   if (held.length > 1) return [];
   return mine.filter(function (row) { return OTHER_SOFTWARE_NOTE_RE.test(row.note); });
@@ -654,6 +777,7 @@ function describeOutcome_(outcome) {
   } else {
     text = '已登記';
   }
+  if (outcome.software === TABLET_ITEM && outcome.cart) text += '（' + tabletText_(outcome.cart, outcome.count) + '）';
   return outcome.isNew ? text : '您先前已登記過，維持原登記：' + text;
 }
 
@@ -688,6 +812,27 @@ function buildReceiptHtml_(sub, outcomes, changes) {
 }
 
 /**
+ * 平板借用的登記回條。result：processTablet_ 的結果 (previous 為被取代的舊登記)；resentFor：補寄時的申請時間文字。
+ */
+function buildTabletReceiptHtml_(sub, result, resentFor) {
+  const tablet = sub.tablet || {};
+  const previous = result && result.previous;
+  const duplicate = !!(result && result.duplicates && result.duplicates.length && !(result.added || []).length);
+  const how = tablet.whole ? '（整車借用）' : '';
+  return '<p>親愛的 ' + escapeHtml_(sub.name) + ' 老師，您好：</p>' +
+    (resentFor ? '<p>此為補寄的登記回條：您於 ' + escapeHtml_(resentFor) + ' 送出的平板借用登記，目前登記內容如下：</p>'
+      : '<p>已收到您的平板借用登記：</p>') +
+    '<ul><li><b>' + escapeHtml_(TABLET_ITEM) + '</b>：' + escapeHtml_(tabletText_(tablet.cart, tablet.count)) + escapeHtml_(how) + '</li></ul>' +
+    (duplicate ? '<p>您先前已登記過相同內容，維持原登記。</p>' : '') +
+    (previous ? '<p>重新填寫以最後一次為準，原本的登記（' + escapeHtml_(tabletText_(previous.cart, previous.count)) + '）<b>已取消</b>。</p>' : '') +
+    (tablet.note ? '<p>提醒：' + escapeHtml_(tablet.note) + '。</p>' : '') +
+    '<p>登記後即可在「數位學習精進方案成果填報」填報平板借用，填報時請填這個 Google 帳號（' + escapeHtml_(sub.email) + '）。</p>' +
+    '<p>' + escapeHtml_(TABLET_RESUBMIT_TEXT) + '</p>' +
+    '<br><p>' + SCHOOL_SIGNATURE + '</p>' +
+    '<p style="color: grey; font-size: 12px;">此為系統自動發送信件，請勿直接回覆。</p>';
+}
+
+/**
  * 補寄登記回條：依 Google 帳號 (不分大小寫) 找出每人目前有效 (未取消) 的登記，
  * 依軟體清單順序排列，組成與送出表單時相同格式的回條內容。
  * @returns {{send: {sub: Object, outcomes: Object[], since: Date}[], missing: string[]}}
@@ -713,7 +858,9 @@ function buildResendPlan_(rows, emails, softwareList) {
       .sort(function (a, b) { return a - b; })[0];
     plan.send.push({
       sub: { name: mine[0].name, email: mine[0].email, workspace: withWorkspace ? withWorkspace.workspace : '' },
-      outcomes: mine.map(function (row) { return { software: row.software, status: row.status, rank: row.rank, isNew: true }; }),
+      outcomes: mine.map(function (row) {
+        return { software: row.software, status: row.status, rank: row.rank, isNew: true, cart: row.cart, count: row.count };
+      }),
       since: since ? new Date(since) : null
     });
   });
@@ -740,6 +887,9 @@ function getRegSheet_(ss) {
     sheet = ss.insertSheet(REG_SHEET_NAME);
     sheet.getRange(1, 1, 1, REG_HEADERS.length).setValues([REG_HEADERS]);
     sheet.setFrozenRows(1);
+  } else if (String(sheet.getRange(1, COL.CART).getValue()).trim() === '') {
+    // v3.5 之前建立的分頁：補上「借用平板車」「借用數量」欄標題
+    sheet.getRange(1, COL.CART, 1, 2).setValues([[REG_HEADERS[COL.CART - 1], REG_HEADERS[COL.COUNT - 1]]]);
   }
   return sheet;
 }
@@ -762,7 +912,9 @@ function readRegistrations_(sheet) {
       serial: String(v[COL.SERIAL - 1]).trim(),
       issuedAt: v[COL.ISSUED_AT - 1],
       note: String(v[COL.NOTE - 1]).trim(),
-      workspace: String(v[COL.WORKSPACE - 1]).trim()
+      workspace: String(v[COL.WORKSPACE - 1]).trim(),
+      cart: String(v[COL.CART - 1]).trim(),
+      count: v[COL.COUNT - 1]
     };
   });
 }
@@ -777,6 +929,7 @@ function otherSoftwareNotes_(rows, sub, toAdd) {
   const held = [];
   rows.forEach(function (row) {
     if (normalize_(row.email) !== email || row.status === STATUS.CANCEL || row.software === REQUIRED_SOFTWARE) return;
+    if (row.software === TABLET_ITEM) return;
     if (held.indexOf(row.software) < 0) held.push(row.software);
   });
   const notes = {};
@@ -795,7 +948,9 @@ function appendRegistrations_(sheet, sub, softwareNames, extraNotes) {
   const extra = extraNotes || {};
   const values = softwareNames.map(function (software) {
     const note = [registrationNote_(sub, software), extra[software] || ''].filter(function (text) { return text; }).join('；');
-    return [sub.time, sub.name, sub.email, sub.identity, software, '', '', false, '', '', note, sub.workspace];
+    const tablet = software === TABLET_ITEM && sub.tablet ? sub.tablet : null;
+    return [sub.time, sub.name, sub.email, sub.identity, software, tablet ? STATUS.REGISTERED : '', '', false, '', '', note, sub.workspace,
+      tablet ? tablet.cart : '', tablet ? tablet.count : ''];
   });
   const startRow = sheet.getLastRow() + 1;
   sheet.getRange(startRow, 1, values.length, REG_HEADERS.length).setValues(values);

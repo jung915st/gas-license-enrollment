@@ -175,11 +175,15 @@ function menuResendReceipts() {
   const failed = [];
   plan.send.forEach(function (item) {
     try {
+      const resentFor = item.since ? Utilities.formatDate(item.since, 'Asia/Taipei', 'MM/dd HH:mm') : '';
+      const tabletOnly = item.outcomes.every(function (outcome) { return outcome.software === TABLET_ITEM; });
+      const tablet = item.outcomes[0];
       MailApp.sendEmail(withCc_({
         to: item.sub.email,
-        subject: '【已登記】教學軟體授權申請',
-        htmlBody: buildReceiptHtml_(item.sub, item.outcomes,
-          { resentFor: item.since ? Utilities.formatDate(item.since, 'Asia/Taipei', 'MM/dd HH:mm') : '' })
+        subject: tabletOnly ? '【已登記】平板借用' : '【已登記】教學軟體授權申請',
+        htmlBody: tabletOnly
+          ? buildTabletReceiptHtml_(Object.assign({}, item.sub, { tablet: { cart: tablet.cart, count: tablet.count } }), null, resentFor)
+          : buildReceiptHtml_(item.sub, item.outcomes, { resentFor: resentFor })
       }, item.sub.email, item.sub.workspace));
       sent.push(item.sub.name);
     } catch (error) {

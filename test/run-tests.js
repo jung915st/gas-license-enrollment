@@ -208,6 +208,7 @@ function makeEnv(opts) {
         const v = {};
         const b = { setHelpText: (h) => { v.help = h; return b; }, requireTextIsEmail: () => { v.kind = 'email'; return b; },
           requireTextMatchesPattern: (p) => { v.kind = 'pattern'; v.pattern = p; return b; },
+          requireNumberBetween: (min, max) => { v.kind = 'number'; v.min = min; v.max = max; return b; },
           build: () => (v.kind === 'email' ? 'email' : v) };
         return b;
       },
@@ -265,6 +266,8 @@ const Q = {
   subject: '任教科目', office: '所屬處室', teacherSay: 'TeacherSay 專業版（必選）',
   pick: '您要另外申請的軟體（限選一項）', pickOffice: '您要另外申請的軟體（行政，限選一項）',
   workspace: '申請 Google AI Pro 教育版的學校帳號',
+  kind: '申請項目', tabletUnit: '您的職務與任教班級（或科目、處室）', tabletCart: '借用的平板車', tabletMode: '借用方式',
+  tabletCount: '借用數量（台）',
   // v3.1 / v3.2 questions, only present on old forms
   software: '您要申請的軟體授權', aiPro: '是否申請 Google AI Pro 教育版？',
 };
@@ -283,7 +286,7 @@ function answersOf(who, software, opts) {
   const office = who.role === '行政';
   if (office && list[0] === AI) throw new Error('test bug: the 行政 dropdown has no Google AI Pro');
   const a = {
-    [Q.name]: who.name, [Q.email]: who.email, [Q.role]: who.role,
+    [Q.name]: who.name, [Q.email]: who.email, [Q.kind]: '教學軟體授權', [Q.role]: who.role,
     [Q.teacherSay]: opts.noTeacherSay ? '' : TS,
     [office ? Q.pickOffice : Q.pick]: list[0] || NONE,
     [Q.workspace]: list[0] === AI ? (who.workspace || '') : '',
@@ -352,6 +355,9 @@ function walkForm(form, answers) {
       if (v && q.validation && q.validation.kind === 'pattern' && !new RegExp(q.validation.pattern).test(v)) {
         return { visited, submitted: false, blockedAt: q.title };
       }
+      if (v && q.validation && q.validation.kind === 'number' && !(Number(v) >= q.validation.min && Number(v) <= q.validation.max)) {
+        return { visited, submitted: false, blockedAt: q.title };
+      }
     }
     let next = null;
     const branching = questions.find((q) => q.nav && q.nav.some((n) => n));
@@ -370,9 +376,10 @@ function walkForm(form, answers) {
   }
   throw new Error('form navigation loops');
 }
-const FORM_LAYOUT = [Q.name, Q.email, '#【TeacherSay 專業版】', Q.teacherSay, '#【職務】', Q.role,
+const FORM_LAYOUT = [Q.name, Q.email, Q.kind, '#【TeacherSay 專業版】', Q.teacherSay, '#【職務】', Q.role,
   '#【學年】', Q.grade, '#【科任】', Q.subject, '#【行政】', Q.office,
-  '#申請軟體授權', Q.pick, '#申請軟體授權（行政）', Q.pickOffice, '#【Google AI Pro 學校帳號】', Q.workspace];
+  '#申請軟體授權', Q.pick, '#申請軟體授權（行政）', Q.pickOffice, '#【Google AI Pro 學校帳號】', Q.workspace,
+  '#【平板借用】', Q.tabletUnit, Q.tabletCart, Q.tabletMode, '#【平板借用數量】', Q.tabletCount];
 const pageOf = (form, title) => form.items.find((i) => i.type === 'PAGE_BREAK' && i.title === title);
 // the v3.3 jumps: 學年/科任 -> software; 行政 -> software (行政); AI Pro -> school account; everything else submits
 function assertJumps(form) {
@@ -385,6 +392,9 @@ function assertJumps(form) {
   const pick = item(form, Q.pick);
   assert.deepStrictEqual(pick.nav, pick.choices.map((c) => (c === AI ? p('【Google AI Pro 學校帳號】') : 'SUBMIT')), 'dropdown jumps');
   assert.ok(item(form, Q.pickOffice).nav.every((n) => n === 'SUBMIT'));
+  assert.deepStrictEqual(item(form, Q.kind).nav, [p('【TeacherSay 專業版】'), p('【平板借用】')], 'kind jumps');
+  assert.strictEqual(p('【平板借用】').goTo, 'SUBMIT', 'after the school account -> submit (not into the tablet section)');
+  assert.deepStrictEqual(item(form, Q.tabletMode).nav, ['SUBMIT', p('【平板借用數量】')], 'whole cart submits, partial asks the count');
 }
 const titlesOf = (form) => form.items.map((i) => (i.type === 'PAGE_BREAK' ? '#' + i.title : i.title));
 
@@ -797,6 +807,95 @@ ok('resending receipts: same format from the current registrations, CC the schoo
   low.E.call('menuResendReceipts()', { __prompt: { button: 'OK', text: 't1@gmail.com' }, __confirm: 'YES' });
   assert.strictEqual(low.E.mails.length, n);
   assert.ok(low.E.alerts[low.E.alerts.length - 1].includes('剩餘寄信額度為 1'));
+});
+
+const tabletAnswers = (who, cart, mode, count) => ({
+  [Q.name]: who.name, [Q.email]: who.email, [Q.kind]: '平板借用', [Q.tabletUnit]: who.unit || '三年二班導師',
+  [Q.tabletCart]: cart, [Q.tabletMode]: mode, [Q.tabletCount]: count === undefined ? '' : String(count),
+});
+const WHOLE = '整車借用';
+const PARTIAL = '部分借用（填寫數量）';
+const regRows14 = (E) => { const s = E.ss.getSheetByName('申請登記'); const n = s.getLastRow(); return n < 2 ? [] : s.getRange(2, 1, n - 1, 14).getValues(); };
+
+ok('tablet borrowing: own branch, cart + count, 已登記 with no seats, independent of software, latest wins, backfill replays', () => {
+  const { E, form, sheet, send } = readyEnv();
+  // ---- respondent paths ----
+  const lu = { name: '盧老師', email: 'lu@gmail.com', unit: '英語科任' };
+  let w = walkForm(form, tabletAnswers(lu, '平板車 A（28 台）', WHOLE));
+  assert.deepStrictEqual([w.visited, w.submitted], [['基本資料', '【平板借用】'], true], 'whole cart: no TeacherSay, no count page');
+  w = walkForm(form, tabletAnswers(lu, '平板車 G（30 台）', PARTIAL, 12));
+  assert.deepStrictEqual([w.visited, w.submitted], [['基本資料', '【平板借用】', '【平板借用數量】'], true]);
+  [0, 31, ''].forEach((n) => assert.strictEqual(walkForm(form, tabletAnswers(lu, '平板車 G（30 台）', PARTIAL, n)).blockedAt, Q.tabletCount, 'count ' + n));
+  assert.deepStrictEqual(item(form, Q.tabletCart).choices.slice(0, 2).concat(item(form, Q.tabletCart).choices.slice(-2)),
+    ['平板車 A（28 台）', '平板車 B（28 台）', '黑車（30 台）', '白車（28 台）']);
+  w = walkForm(form, answersOf(teacher(9, '一年級'), 'Kahoot 教師版'));
+  assert.ok(w.submitted && !w.visited.includes('【平板借用】'), 'software path never enters the tablet sections');
+  assert.ok(form.description.includes('平板借用') && item(form, Q.email).help.includes('填報成果（含平板借用）'));
+
+  // ---- registering ----
+  const before = E.mails.length;
+  submitTo(E, sheet, tabletAnswers(lu, '平板車 A（28 台）', WHOLE), t(1));
+  let rows = regRows14(E);
+  assert.deepStrictEqual(rows.map((r) => [r[1], r[2], r[3], r[4], r[5], r[6], r[12], r[13]]),
+    [['盧老師', 'lu@gmail.com', '英語科任', '平板借用', '已登記', '', '平板車 A', 28]]);
+  assert.strictEqual(E.ss.getSheetByName('申請登記').getRange(1, 13, 1, 2).getValues()[0].join(), '借用平板車,借用數量');
+  let mail = E.mails[E.mails.length - 1];
+  assert.deepStrictEqual([mail.to, mail.subject], ['lu@gmail.com', '【已登記】平板借用']);
+  assert.ok(mail.htmlBody.includes('平板車 A，28 台（整車借用）') && mail.htmlBody.includes('填報時請填這個 Google 帳號（lu@gmail.com）'));
+  assert.ok(!E.ss.getSheetByName('申請統計').getRange(1, 1, 20, 1).getValues().some((r) => r[0] === '平板借用'), 'no seats, not in the stats');
+
+  // the same person also applies for software: both registrations stay
+  send(2, { name: '盧老師', email: 'lu@gmail.com', role: '科任', detail: '英語' }, 'Padlet 學校版');
+  rows = regRows14(E);
+  assert.deepStrictEqual(rows.map((r) => [r[4], r[5]]), [['平板借用', '已登記'], [TS, '正取'], ['Padlet 學校版', '正取']]);
+  assert.ok(!E.mails[E.mails.length - 1].htmlBody.includes('平板'), 'the software receipt is about software only');
+
+  // same tablet answers again: nothing changes
+  submitTo(E, sheet, tabletAnswers(lu, '平板車 A（28 台）', WHOLE), t(3));
+  assert.strictEqual(regRows14(E).length, 3);
+  assert.ok(E.mails[E.mails.length - 1].htmlBody.includes('您先前已登記過相同內容'));
+
+  // a different cart and count: the old one is cancelled, software untouched
+  submitTo(E, sheet, tabletAnswers(lu, '平板車 B（28 台）', PARTIAL, 10), t(4));
+  rows = regRows14(E);
+  assert.deepStrictEqual(rows.map((r) => [r[4], r[5], r[12], r[13]]),
+    [['平板借用', '取消', '平板車 A', 28], [TS, '正取', '', ''], ['Padlet 學校版', '正取', '', ''], ['平板借用', '已登記', '平板車 B', 10]]);
+  assert.ok(rows[0][10].includes('重新填寫平板借用'));
+  mail = E.mails[E.mails.length - 1];
+  assert.ok(mail.htmlBody.includes('平板車 B，10 台') && mail.htmlBody.includes('原本的登記（平板車 A，28 台）<b>已取消</b>'));
+
+  // a later software refill does not cancel the tablet registration
+  send(5, { name: '盧老師', email: 'lu@gmail.com', role: '科任', detail: '英語' }, 'Kahoot 教師版');
+  rows = regRows14(E);
+  assert.strictEqual(rows.find((r) => r[4] === '平板借用' && r[5] === '已登記')[12], '平板車 B');
+  assert.strictEqual(rows.find((r) => r[4] === 'Padlet 學校版')[5], '取消');
+
+  // more than the cart holds: counted as the whole cart, with a note
+  submitTo(E, sheet, tabletAnswers({ name: '張老師', email: 'chang@gmail.com', unit: '教務處' }, '平板車 C（28 台）', PARTIAL, 40), t(6));
+  const chang = regRows14(E).find((r) => r[2] === 'chang@gmail.com');
+  assert.deepStrictEqual([chang[12], chang[13]], ['平板車 C', 28]);
+  assert.ok(chang[10].includes('填寫 40 台超過該車台數，以整車 28 台計'));
+  assert.ok(E.mails[E.mails.length - 1].htmlBody.includes('提醒：填寫 40 台超過該車台數'));
+
+  // approving all 正取 never ticks a tablet row; the status survives re-ranking
+  E.call('menuApproveAllAccepted()');
+  rows = regRows14(E);
+  assert.ok(rows.filter((r) => r[4] === '平板借用').every((r) => r[7] !== true), 'tablet rows are not approved');
+  assert.deepStrictEqual(rows.filter((r) => r[4] === '平板借用').map((r) => r[5]), ['取消', '已登記', '已登記']);
+
+  // resend to a tablet-only person uses the tablet receipt
+  const n = E.mails.length;
+  E.call('menuResendReceipts()', { __prompt: { button: 'OK', text: 'chang@gmail.com' }, __confirm: 'YES' });
+  assert.deepStrictEqual([E.mails.length - n, E.mails[n].subject], [1, '【已登記】平板借用']);
+  assert.ok(E.mails[n].htmlBody.includes('此為補寄的登記回條') && E.mails[n].htmlBody.includes('平板車 C，28 台'));
+
+  // backfill replays every response and lands on the same sheet
+  const snapshot = JSON.stringify(regRows14(E));
+  const mails = E.mails.length;
+  E.call('menuBackfill()');
+  assert.strictEqual(JSON.stringify(regRows14(E)), snapshot);
+  assert.strictEqual(E.mails.length, mails);
+  assert.ok(before < mails);
 });
 
 // ============ 6. approval + issuing ============

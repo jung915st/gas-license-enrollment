@@ -264,6 +264,36 @@ function runEnrollmentTests() {
   check('回條：列出已取消與待確認的軟體',
     [changedHtml.indexOf('<b>已取消</b>：Padlet 學校版、HiTeach 專業版') >= 0, changedHtml.indexOf('確認是否保留：Wordwall 專業版') >= 0], [true, true]);
   check('回條：說明重新填寫以最後一次為準', changedHtml.indexOf(RESUBMIT_RULE_TEXT) >= 0, true);
+  // --- 平板借用 ---
+  const tr = function (cart, mode, count) {
+    const r = tabletRequest_(cart, mode, count);
+    return [r.cart, r.count, r.whole, r.note];
+  };
+  check('平板借用：整車以該車台數登記', tr('平板車 G（30 台）', '整車借用', ''), ['平板車 G', 30, true, '']);
+  check('平板借用：部分借用照填寫的數量', tr('黑車（30 台）', '部分借用（填寫數量）', ' 12 '), ['黑車', 12, false, '']);
+  check('平板借用：超過該車台數以整車計並加註', tr('平板車 A（28 台）', '部分借用（填寫數量）', '40'),
+    ['平板車 A', 28, true, '填寫 40 台超過該車台數，以整車 28 台計']);
+  check('平板借用：數量不正確時留空並加註', tr('白車（28 台）', '部分借用（填寫數量）', 'abc'), ['白車', '', false, '未填寫正確的借用數量']);
+  check('平板借用：不在清單的平板車照填寫內容並加註', tr('平板車 Z', '整車借用', ''), ['平板車 Z', '', true, '平板車不在清單中，請確認']);
+  const tabletSub = parseSubmission_({
+    '您的大名': ['張老師'], '您要用來開通授權的 Google 帳號': ['chang@x.tw'], '申請項目': ['平板借用'],
+    '您的職務與任教班級（或科目、處室）': ['教務處'], '借用的平板車': ['平板車 B（28 台）'], '借用方式': ['部分借用（填寫數量）'],
+    '借用數量（台）': ['5'], 'TeacherSay 專業版（必選）': ['TeacherSay 專業版']
+  }, softwareList, at(1));
+  check('平板借用：解析為平板借用，不含 TeacherSay',
+    [tabletSub.kind, tabletSub.selections, tabletSub.identity, tabletSub.tablet.cart, tabletSub.tablet.count], ['平板借用', ['平板借用'], '教務處', '平板車 B', 5]);
+  const withTablet = [
+    reg(1, 't@x.tw', '一年級', '平板借用', { status: STATUS.REGISTERED }),
+    reg(1, 't@x.tw', '一年級', 'Kahoot 教師版', { status: STATUS.OK })
+  ];
+  check('重新填寫教學軟體不會取消平板借用',
+    planReplacement_(withTablet, { email: 't@x.tw', time: at(5), selections: ['TeacherSay 專業版'] }).cancel.map(function (r) { return r.software; }),
+    ['Kahoot 教師版']);
+  check('平板借用不算「另登記了其他軟體」',
+    otherSoftwareNotes_(withTablet.slice(0, 1), { email: 't@x.tw' }, ['Kahoot 教師版']), {});
+  check('平板借用的排序狀態維持「已登記」',
+    rankRegistrations_(withTablet, softwareList).map(function (r) { return r.status; }), ['已登記', '正取']);
+
   // --- 補寄登記回條 ---
   const resendRows = [
     reg(3, 'Q@x.tw', '科任', 'Kahoot 教師版', { status: STATUS.OK, rank: 2 }),

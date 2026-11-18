@@ -34,7 +34,13 @@ const FORM_DESCRIPTION =
   RESUBMIT_RULE_TEXT + '\n' +
   '登記不代表已取得授權：資訊組審核後，會寄信到您填寫的 Google 帳號，通知授權序號或開通方式。\n' +
   'Google AI Pro 教育版限' + LIMIT_PER_GROUP_TEXT + '可申請（算在另選的 1 項內），並須填寫學校帳號（@' + SCHOOL_DOMAIN + '）；' +
-  '行政人員的 Google AI Pro 由資訊組另行分配。';
+  '行政人員的 Google AI Pro 由資訊組另行分配。\n' +
+  '平板借用：「申請項目」選「平板借用」，登記借用的平板車與數量（不需勾選 TeacherSay）；' +
+  '登記後才能在「數位學習精進方案成果填報」填報平板借用。教學軟體與平板借用都要申請時，請各填一次。';
+const EMAIL_HELP = '多數軟體以 Google 帳號單一登入，請填寫您實際用來登入軟體的 Google 帳號。授權通知也會寄到這個信箱。' +
+  '填報成果（含平板借用）時也請使用這個帳號。';
+const PAGE_TABLET = '【平板借用】';
+const PAGE_TABLET_COUNT = '【平板借用數量】';
 
 // 區段標題 (setupForm 以標題辨識既有表單上的區段)
 const PAGE_TEACHERSAY = '【TeacherSay 專業版】';
@@ -214,7 +220,7 @@ function buildEnrollmentForm_(form) {
 
   form.addTextItem().setTitle(Q_NAME).setRequired(true);
   form.addTextItem().setTitle(Q_EMAIL)
-    .setHelpText('多數軟體以 Google 帳號單一登入，請填寫您實際用來登入軟體的 Google 帳號。授權通知也會寄到這個信箱。')
+    .setHelpText(EMAIL_HELP)
     .setValidation(emailValidation)
     .setRequired(true);
   form.addMultipleChoiceItem().setTitle(Q_ROLE).setChoiceValues([ROLE.GRADE, ROLE.SUBJECT, ROLE.OFFICE]).setRequired(true);
@@ -264,6 +270,7 @@ function syncEnrollmentForm_(form, softwareList) {
 
   // ---------- 取得或建立所有題目與區段 ----------
   const email = need(Q_EMAIL, T.TEXT, '簡答');
+  const kind = ensure(Q_KIND, T.MULTIPLE_CHOICE, '單選', function () { return form.addMultipleChoiceItem(); });
   const pageTeacherSay = ensure(PAGE_TEACHERSAY, T.PAGE_BREAK, '區段', newPage);
   const teacherSay = ensure(Q_TEACHERSAY, T.CHECKBOX, '核取方塊', function () { return form.addCheckboxItem(); });
   const pageRole = ensure(PAGE_ROLE, T.PAGE_BREAK, '區段', newPage);
@@ -280,13 +287,48 @@ function syncEnrollmentForm_(form, softwareList) {
   const pickOffice = ensure(Q_PICK_OFFICE, T.LIST, '下拉選單', newList);
   const pageWorkspace = ensure(PAGE_WORKSPACE, T.PAGE_BREAK, '區段', newPage);
   const workspace = ensure(Q_WORKSPACE, T.TEXT, '簡答', function () { return form.addTextItem(); });
+  const pageTablet = ensure(PAGE_TABLET, T.PAGE_BREAK, '區段', newPage);
+  const tabletUnit = ensure(Q_TABLET_UNIT, T.TEXT, '簡答', function () { return form.addTextItem(); });
+  const tabletCart = ensure(Q_TABLET_CART, T.LIST, '下拉選單', newList);
+  const tabletMode = ensure(Q_TABLET_MODE, T.MULTIPLE_CHOICE, '單選', function () { return form.addMultipleChoiceItem(); });
+  const pageTabletCount = ensure(PAGE_TABLET_COUNT, T.PAGE_BREAK, '區段', newPage);
+  const tabletCount = ensure(Q_TABLET_COUNT, T.TEXT, '簡答', function () { return form.addTextItem(); });
 
   // ---------- 排列順序：從「Google 帳號」之後依序排好 ----------
-  [pageTeacherSay, teacherSay, pageRole, role, pageGrade, grade, pageSubject, subject, pageOffice, office,
-    pageSoftware, pick, pageSoftwareOffice, pickOffice, pageWorkspace, workspace].reduce(function (anchor, item) {
+  [kind, pageTeacherSay, teacherSay, pageRole, role, pageGrade, grade, pageSubject, subject, pageOffice, office,
+    pageSoftware, pick, pageSoftwareOffice, pickOffice, pageWorkspace, workspace,
+    pageTablet, tabletUnit, tabletCart, tabletMode, pageTabletCount, tabletCount].reduce(function (anchor, item) {
     placeAfter_(form, item, anchor);
     return item;
   }, email);
+
+  // ---------- 區段 1：Google 帳號說明、申請項目 (依答案前往教學軟體或平板借用) ----------
+  email.asTextItem().setHelpText(EMAIL_HELP);
+  const kindItem = kind.asMultipleChoiceItem();
+  kindItem.setChoices([
+    kindItem.createChoice(KIND.SOFTWARE, pageTeacherSay.asPageBreakItem()),
+    kindItem.createChoice(KIND.TABLET, pageTablet.asPageBreakItem())
+  ]).setHelpText('教學軟體與平板借用都要申請時，請各填一次表單；兩種登記互不影響。').setRequired(true);
+
+  // ---------- 平板借用：職務與班級、平板車、整車或填數量 ----------
+  pageTablet.asPageBreakItem().setHelpText('登記後即可在「數位學習精進方案成果填報」填報平板借用，填報時請使用同一個 Google 帳號。' +
+    TABLET_RESUBMIT_TEXT);
+  tabletUnit.asTextItem().setHelpText('例：三年二班導師、英語科任、教務處').setRequired(true);
+  const cartItem = tabletCart.asListItem();
+  cartItem.setChoiceValues(TABLET_CARTS.map(function (c) { return c.name + '（' + c.max + ' 台）'; })).setRequired(true);
+  const modeItem = tabletMode.asMultipleChoiceItem();
+  modeItem.setChoices([
+    modeItem.createChoice(TABLET_MODE.WHOLE, NAV.SUBMIT),
+    modeItem.createChoice(TABLET_MODE.PARTIAL, pageTabletCount.asPageBreakItem())
+  ]).setHelpText('整車借用以該車台數登記；部分借用請在下一頁填寫數量。').setRequired(true);
+  const maxCart = Math.max.apply(null, TABLET_CARTS.map(function (c) { return c.max; }));
+  tabletCount.asTextItem()
+    .setHelpText('請填 1 到該平板車的台數；超過該車台數時以整車計。')
+    .setValidation(FormApp.createTextValidation()
+      .setHelpText('請填 1～' + maxCart + ' 的數字')
+      .requireNumberBetween(1, maxCart)
+      .build())
+    .setRequired(true);
 
   // ---------- 區段 2【TeacherSay】：必填、只有一個選項；沒勾就不能前往下一頁 ----------
   pageTeacherSay.asPageBreakItem().setHelpText(TEACHERSAY_NOTICE);
@@ -336,7 +378,7 @@ function syncEnrollmentForm_(form, softwareList) {
   // ---------- 區段之間的跳轉 ----------
   // 分頁符號的 setGoToPage：依序填完「這個分頁符號之前的區段」後要前往哪裡。
   // 區段裡有依答案跳轉的題目時 (職務、學年／科任的下拉選單)，以題目為準。
-  pageTeacherSay.asPageBreakItem().setGoToPage(NAV.CONTINUE);                     // 基本資料 → TeacherSay
+  pageTeacherSay.asPageBreakItem().setGoToPage(NAV.CONTINUE);                     // (基本資料的申請項目依答案跳轉)
   pageRole.asPageBreakItem().setGoToPage(NAV.CONTINUE);                           // TeacherSay → 職務
   pageGrade.asPageBreakItem().setGoToPage(NAV.CONTINUE);                          // (職務依答案跳轉)
   pageSubject.asPageBreakItem().setGoToPage(pageSoftware.asPageBreakItem());      // 學年填完 → 申請軟體授權
@@ -344,6 +386,8 @@ function syncEnrollmentForm_(form, softwareList) {
   pageSoftware.asPageBreakItem().setGoToPage(pageSoftwareOffice.asPageBreakItem()); // 行政填完 → 申請軟體授權（行政）
   pageSoftwareOffice.asPageBreakItem().setGoToPage(NAV.CONTINUE);                 // (學年／科任的選單依答案跳轉)
   pageWorkspace.asPageBreakItem().setGoToPage(NAV.SUBMIT);                        // 行政的選單填完 → 送出
+  pageTablet.asPageBreakItem().setGoToPage(NAV.SUBMIT);                           // 學校帳號填完 → 送出
+  pageTabletCount.asPageBreakItem().setGoToPage(NAV.CONTINUE);                    // (借用方式依答案跳轉)
 
   // ---------- 刪除舊版題目 (v3.1／v3.2)；先刪題目再刪區段 ----------
   [Q_SOFTWARE, Q_AI_PRO, PAGE_AI_PRO].forEach(function (title) {
